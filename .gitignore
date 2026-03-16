@@ -1,0 +1,16 @@
+# Never commit secrets or local state
+.env
+
+# Home Assistant generates these at runtime
+config/homeassistant/.storage/
+config/homeassistant/home-assistant.log
+config/homeassistant/home-assistant_v2.db*
+config/homeassistant/tts/
+config/homeassistant/.cloud/
+
+# Frigate runtime state
+config/frigate/model_cache/
+
+# Editor
+.DS_Store
+*.swp
