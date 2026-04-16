@@ -6,6 +6,19 @@
 # http://custos.local → Home Assistant dashboard
 # http://custos.local/frigate/* → Frigate NVR UI
 :80 {
+    # Setup wizard — accessible at http://custos.local/setup
+    route /setup* {
+        reverse_proxy localhost:3000
+    }
+
+    # Wizard static assets (thumbnails, CSS)
+    route /thumbnails/* {
+        reverse_proxy localhost:3000
+    }
+    route /static/* {
+        reverse_proxy localhost:3000
+    }
+
     # Frigate NVR UI — accessible at http://custos.local/frigate
     route /frigate* {
         uri strip_prefix /frigate

@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% set step = 4 %}
+{% block title_suffix %} — Notifications{% endblock %}
+
+{% block content %}
+<h1 class="text-2xl font-bold text-slate-900 mb-1">How should I notify you?</h1>
+<p class="text-slate-500 mb-6">Choose how you want to receive alerts when something is detected.</p>
+
+<form method="post" action="/setup/notify">
+
+  <!-- Option A: HA Companion (recommended) -->
+  <label class="block cursor-pointer mb-3">
+    <input type="radio" name="method" value="companion"
+           {% if notify_method == 'companion' %}checked{% endif %}
+           class="sr-only peer">
+    <div class="bg-white border-2 border-slate-200 peer-checked:border-brand rounded-2xl p-5 transition-colors">
+      <div class="flex items-start gap-4">
+        <span class="text-3xl mt-0.5">📱</span>
+        <div class="flex-1">
+          <p class="font-semibold text-slate-800">Home Assistant App <span class="text-xs bg-brand text-white rounded-full px-2 py-0.5 ml-1 font-normal">Recommended</span></p>
+          <p class="text-sm text-slate-500 mt-1">
+            Rich push notifications with a photo of what was detected, right on your phone's lock screen.
+            Works on iPhone and Android.
+          </p>
+          <div class="mt-3 bg-slate-50 rounded-xl p-3 text-sm text-slate-600">
+            <p class="font-medium mb-1">Setup takes 2 minutes:</p>
+            <ol class="list-decimal list-inside space-y-1">
+              <li>Install the <strong>Home Assistant</strong> app on your phone</li>
+              <li>Open it and tap <em>"Log in to your server"</em></li>
+              <li>It will find this system automatically on your network</li>
+            </ol>
+            <div class="flex gap-3 mt-3">
+              <a href="https://apps.apple.com/app/home-assistant/id1099568401" target="_blank"
+                 class="text-brand text-xs underline">iOS App Store →</a>
+              <a href="https://play.google.com/store/apps/details?id=io.homeassistant.companion.android" target="_blank"
+                 class="text-brand text-xs underline">Google Play →</a>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </label>
+
+  <!-- Option B: ntfy (push without app store) -->
+  <label class="block cursor-pointer mb-3">
+    <input type="radio" name="method" value="ntfy"
+           {% if notify_method == 'ntfy' %}checked{% endif %}
+           class="sr-only peer">
+    <div class="bg-white border-2 border-slate-200 peer-checked:border-brand rounded-2xl p-5 transition-colors">
+      <div class="flex items-start gap-4">
+        <span class="text-3xl mt-0.5">🔔</span>
+        <div>
+          <p class="font-semibold text-slate-800">ntfy (push without a vendor account)</p>
+          <p class="text-sm text-slate-500 mt-1">
+            Free, open-source push notifications. Works on iPhone, Android, and desktop.
+            No account required if you use self-hosted ntfy.
+          </p>
+        </div>
+      </div>
+    </div>
+  </label>
+
+  <!-- Option C: Skip for now -->
+  <label class="block cursor-pointer mb-6">
+    <input type="radio" name="method" value="skip"
+           {% if notify_method == 'skip' %}checked{% endif %}
+           class="sr-only peer">
+    <div class="bg-white border-2 border-slate-200 peer-checked:border-brand rounded-2xl p-5 transition-colors">
+      <div class="flex items-start gap-4">
+        <span class="text-3xl mt-0.5">⏭️</span>
+        <div>
+          <p class="font-semibold text-slate-800">Set up later</p>
+          <p class="text-sm text-slate-500 mt-1">
+            Skip for now. You can set up notifications from the dashboard any time.
+          </p>
+        </div>
+      </div>
+    </div>
+  </label>
+
+  <button type="submit"
+          class="w-full bg-brand hover:bg-brand-dark text-white font-semibold py-4 px-6 rounded-2xl text-lg transition-colors shadow-sm">
+    Continue →
+  </button>
+</form>
+{% endblock %}

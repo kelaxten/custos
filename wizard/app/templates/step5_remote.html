@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% set step = 5 %}
+{% block title_suffix %} — Remote Access{% endblock %}
+
+{% block content %}
+<h1 class="text-2xl font-bold text-slate-900 mb-1">Access from anywhere</h1>
+<p class="text-slate-500 mb-6">
+  Want to check your cameras when you're away from home?
+  Tailscale creates a secure private network between your phone and this hub —
+  no port forwarding, no VPN setup, no expertise required.
+</p>
+
+{% if tailscale_installed %}
+<div class="bg-green-50 border border-green-200 rounded-2xl p-5 mb-6 flex items-center gap-4">
+  <span class="text-2xl">✅</span>
+  <div>
+    <p class="font-semibold text-green-800">Tailscale is already installed.</p>
+    <p class="text-sm text-green-700 mt-1">
+      Just install the Tailscale app on your phone and sign in to the same account.
+    </p>
+  </div>
+</div>
+{% else %}
+<div class="bg-white border border-slate-200 rounded-2xl p-5 mb-6">
+  <p class="font-semibold text-slate-800 mb-3">Install Tailscale on this hub (one command):</p>
+  <div class="bg-slate-900 text-green-400 rounded-xl px-4 py-3 font-mono text-sm overflow-x-auto mb-4">
+    curl -fsSL https://tailscale.com/install.sh | sh && sudo tailscale up
+  </div>
+  <p class="text-sm text-slate-500">
+    Then install the <a href="https://tailscale.com/download" class="text-brand underline" target="_blank">Tailscale app</a>
+    on your phone. Sign in to the same account. Done — your cameras are accessible anywhere.
+  </p>
+</div>
+{% endif %}
+
+<form method="post" action="/setup/finalize">
+  <button type="submit"
+          class="w-full bg-brand hover:bg-brand-dark text-white font-semibold py-4 px-6 rounded-2xl text-lg transition-colors shadow-sm mb-3">
+    Finish Setup →
+  </button>
+  <p class="text-center text-sm text-slate-400">
+    Remote access is optional. You can skip this and set it up later.
+  </p>
+</form>
+{% endblock %}
