@@ -1,0 +1,43 @@
+# Home Assistant configuration — Custos
+# This file wires up HA as a notification router for Frigate detection events.
+# Users interact with the HA Companion app on their phone, not with this file.
+
+# ─── Core ─────────────────────────────────────────────────────────────────────
+homeassistant:
+  name: Custos
+  unit_system: imperial
+  time_zone: America/New_York   # Update to your timezone (see docs/raspberry-pi-setup.md)
+  country: US
+
+# Allow HA to be accessed through the Caddy reverse proxy
+http:
+  use_x_forwarded_for: true
+  trusted_proxies:
+    - 127.0.0.1
+    - 172.16.0.0/12   # Docker bridge network range
+
+# ─── Integrations ─────────────────────────────────────────────────────────────
+# Enable the built-in HA frontend (the dashboard your spouse will use on their phone)
+frontend:
+  themes: !include_dir_merge_named themes
+
+# Default config components
+default_config:
+
+# ─── MQTT ─────────────────────────────────────────────────────────────────────
+# Connect HA to the local Mosquitto broker so it can receive Frigate events.
+mqtt:
+  broker: 127.0.0.1    # localhost because HA uses host networking
+  port: 1883
+  discovery: true      # auto-discover Frigate entities via MQTT discovery
+
+# ─── Automations & Scripts ────────────────────────────────────────────────────
+automation: !include automations.yaml
+script: !include_dir_merge_named scripts
+scene: !include scenes.yaml
+
+# ─── Logging ──────────────────────────────────────────────────────────────────
+logger:
+  default: warning
+  logs:
+    homeassistant.components.mqtt: info

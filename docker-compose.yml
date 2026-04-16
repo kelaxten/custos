@@ -1,0 +1,100 @@
+# Custos – Home Security Stack
+# Raspberry Pi 5 (ARM64) · Reolink cameras · Home Assistant push notifications
+#
+# Prerequisites: run scripts/setup.sh first, then copy .env.example to .env and fill it in.
+
+version: "3.9"
+
+services:
+
+  # ─── Frigate NVR ──────────────────────────────────────────────────────────
+  # Records video, runs AI object detection, publishes events over MQTT.
+  frigate:
+    image: ghcr.io/blakeblackshear/frigate:stable
+    container_name: frigate
+    restart: unless-stopped
+    privileged: true          # needed for hardware decoder access on Pi 5
+    shm_size: "256mb"         # shared memory for frame buffers (increase to 512mb for 4+ cameras)
+    devices:
+      # Pi 5 V4L2 hardware video decoder (reduces CPU load significantly)
+      - /dev/video10:/dev/video10
+      - /dev/video11:/dev/video11
+      - /dev/video12:/dev/video12
+      # Uncomment if you have a Coral USB TPU for faster AI detection:
+      # - /dev/bus/usb:/dev/bus/usb
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - ./config/frigate:/config
+      - ${CUSTOS_STORAGE_PATH:-/opt/custos/storage}/recordings:/media/frigate
+    ports:
+      - "5000:5000"   # Frigate web UI (also exposed via Caddy at custos.local/frigate)
+      - "8554:8554"   # RTSP re-streams (optional: view cameras from other apps)
+      - "8555:8555/tcp"
+      - "8555:8555/udp"
+    environment:
+      FRIGATE_RTSP_PASSWORD: ${FRIGATE_RTSP_PASSWORD}
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+    networks:
+      - custos
+
+  # ─── Home Assistant ───────────────────────────────────────────────────────
+  # Automation hub: receives Frigate events via MQTT, sends push notifications
+  # to the HA Companion app on your phone.
+  homeassistant:
+    image: ghcr.io/home-assistant/home-assistant:stable
+    container_name: homeassistant
+    restart: unless-stopped
+    privileged: true
+    network_mode: host        # host networking lets HA discover devices on your LAN
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - ./config/homeassistant:/config
+    depends_on:
+      - mosquitto
+      - frigate
+    # Note: because network_mode is host, HA is on port 8123 directly (not in the
+    # custos bridge network). Caddy connects to it at 127.0.0.1:8123.
+
+  # ─── Mosquitto MQTT ───────────────────────────────────────────────────────
+  # Message bus between Frigate and HA. Internal plumbing — invisible to users.
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: mosquitto
+    restart: unless-stopped
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - ./config/mosquitto:/mosquitto/config
+      - ${CUSTOS_STORAGE_PATH:-/opt/custos/storage}/mosquitto/data:/mosquitto/data
+      - ${CUSTOS_STORAGE_PATH:-/opt/custos/storage}/mosquitto/log:/mosquitto/log
+    ports:
+      - "1883:1883"
+    healthcheck:
+      test: ["CMD-SHELL", "mosquitto_pub -h localhost -t healthcheck -m ping || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - custos
+
+  # ─── Caddy reverse proxy ──────────────────────────────────────────────────
+  # Serves custos.local — routes to HA dashboard and Frigate UI.
+  # Automatic HTTPS for remote access (if you have a domain).
+  caddy:
+    image: caddy:2-alpine
+    container_name: caddy
+    restart: unless-stopped
+    network_mode: host        # same reason as HA — needs to reach localhost:8123
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ${CUSTOS_STORAGE_PATH:-/opt/custos/storage}/caddy/data:/data
+      - ${CUSTOS_STORAGE_PATH:-/opt/custos/storage}/caddy/config:/config
+    depends_on:
+      - homeassistant
+      - frigate
+
+networks:
+  custos:
+    driver: bridge

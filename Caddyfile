@@ -1,0 +1,29 @@
+# Caddyfile — Custos reverse proxy
+# Serves custos.local on your local network.
+# All traffic on port 80 is handled here.
+
+# ─── Local network access ─────────────────────────────────────────────────────
+# http://custos.local → Home Assistant dashboard
+# http://custos.local/frigate/* → Frigate NVR UI
+:80 {
+    # Frigate NVR UI — accessible at http://custos.local/frigate
+    route /frigate* {
+        uri strip_prefix /frigate
+        reverse_proxy localhost:5000
+    }
+
+    # Everything else → Home Assistant
+    reverse_proxy localhost:8123
+}
+
+# ─── Optional: HTTPS with a real domain (e.g. via Tailscale + custom domain) ──
+# If you've set up a domain (e.g. home.yourdomain.com pointing to your Tailscale IP),
+# uncomment and fill in:
+#
+# home.yourdomain.com {
+#     route /frigate* {
+#         uri strip_prefix /frigate
+#         reverse_proxy localhost:5000
+#     }
+#     reverse_proxy localhost:8123
+# }

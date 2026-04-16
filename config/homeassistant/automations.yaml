@@ -1,0 +1,144 @@
+# Custos Automations — Home Assistant
+# These automations send push notifications to the HA Companion app whenever
+# Frigate detects a person or vehicle.
+#
+# HOW NOTIFICATIONS REACH YOUR PHONE:
+#   Frigate → MQTT → Home Assistant → HA Companion app → your phone
+#
+# SETUP REQUIRED:
+#   1. Install the Home Assistant Companion app on both phones
+#   2. Sign in to HA (http://custos.local or http://<pi-ip>:8123)
+#   3. The app registers a notification service named notify.mobile_app_<your_phone_name>
+#   4. Update NOTIFY_TARGET below with both device service names, OR use the
+#      notify.all_devices group (see scripts/setup-notifications.md)
+
+# ─── Person Detected ──────────────────────────────────────────────────────────
+- id: "custos_person_detected"
+  alias: "Person Detected — Push Notification"
+  description: "Send phone alert when Frigate detects a new person"
+  mode: parallel
+  max: 10
+
+  trigger:
+    - platform: mqtt
+      topic: frigate/events
+      id: frigate_event
+
+  condition:
+    # Only alert on NEW events (not updates to ongoing events)
+    - condition: template
+      value_template: >
+        {{ trigger.payload_json.type == 'new'
+           and trigger.payload_json.after.label == 'person'
+           and trigger.payload_json.after.score | float >= 0.75 }}
+
+  action:
+    - variables:
+        camera: "{{ trigger.payload_json.after.camera }}"
+        camera_pretty: "{{ trigger.payload_json.after.camera | replace('_', ' ') | title }}"
+        event_id: "{{ trigger.payload_json.after.id }}"
+        score_pct: "{{ (trigger.payload_json.after.score | float * 100) | round(0) }}%"
+
+    - service: notify.mobile_app_all_devices
+      data:
+        title: "Person Detected"
+        message: "{{ camera_pretty }}"
+        data:
+          # Attach the Frigate snapshot image to the notification
+          image: "http://127.0.0.1:5000/api/events/{{ event_id }}/snapshot.jpg"
+          url: "http://custos.local/frigate/events/{{ event_id }}"
+          # iOS — show notification immediately, don't batch
+          push:
+            interruption-level: time-sensitive
+          # Android
+          priority: high
+          ttl: 0
+          channel: custos-alerts
+          importance: high
+          tag: "custos-person-{{ camera }}"  # replace per-camera so repeat detections update the same notification
+
+# ─── Vehicle Detected ─────────────────────────────────────────────────────────
+- id: "custos_vehicle_detected"
+  alias: "Vehicle Detected — Push Notification"
+  description: "Send phone alert when Frigate detects a new vehicle"
+  mode: parallel
+  max: 10
+
+  trigger:
+    - platform: mqtt
+      topic: frigate/events
+      id: frigate_event
+
+  condition:
+    - condition: template
+      value_template: >
+        {{ trigger.payload_json.type == 'new'
+           and trigger.payload_json.after.label == 'car'
+           and trigger.payload_json.after.score | float >= 0.75 }}
+
+  action:
+    - variables:
+        camera: "{{ trigger.payload_json.after.camera }}"
+        camera_pretty: "{{ trigger.payload_json.after.camera | replace('_', ' ') | title }}"
+        event_id: "{{ trigger.payload_json.after.id }}"
+
+    - service: notify.mobile_app_all_devices
+      data:
+        title: "Vehicle Detected"
+        message: "{{ camera_pretty }}"
+        data:
+          image: "http://127.0.0.1:5000/api/events/{{ event_id }}/snapshot.jpg"
+          url: "http://custos.local/frigate/events/{{ event_id }}"
+          push:
+            interruption-level: active
+          channel: custos-alerts
+          tag: "custos-vehicle-{{ camera }}"
+
+# ─── Camera Offline Alert ─────────────────────────────────────────────────────
+- id: "custos_camera_offline"
+  alias: "Camera Offline — Push Notification"
+  description: "Alert when a camera stops sending video"
+  mode: parallel
+  max: 5
+
+  trigger:
+    - platform: mqtt
+      topic: frigate/available
+      payload: "offline"
+
+  action:
+    - service: notify.mobile_app_all_devices
+      data:
+        title: "Camera Offline"
+        message: "A camera has gone offline. Check your Custos dashboard."
+        data:
+          channel: custos-alerts
+          importance: high
+
+# ─── Quiet Hours: Suppress Vehicle Alerts Overnight ──────────────────────────
+# Uncomment this if car detections at 3am are waking you up.
+# Person detections stay on 24/7 for security.
+#
+# - id: "custos_quiet_hours_vehicles"
+#   alias: "Quiet Hours — Suppress Vehicle Notifications"
+#   description: "Disable vehicle alerts between 10pm and 6am"
+#   mode: single
+#   trigger:
+#     - platform: time
+#       at: "22:00:00"
+#       id: start_quiet
+#     - platform: time
+#       at: "06:00:00"
+#       id: end_quiet
+#   action:
+#     - if:
+#         - condition: trigger
+#           id: start_quiet
+#       then:
+#         - service: automation.turn_off
+#           target:
+#             entity_id: automation.vehicle_detected_push_notification
+#       else:
+#         - service: automation.turn_on
+#           target:
+#             entity_id: automation.vehicle_detected_push_notification
