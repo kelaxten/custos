@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Custos — Event Timeline</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { background: #0f172a; color: #e2e8f0; font-family: ui-sans-serif, system-ui, sans-serif; }
+    .label-person  { background: #1d4ed8; }
+    .label-car     { background: #047857; }
+    .label-cat,
+    .label-dog     { background: #7c3aed; }
+    .label-default { background: #475569; }
+    .event-card:hover { transform: translateY(-2px); transition: transform 0.15s; }
+    .spinner { border: 3px solid #334155; border-top-color: #60a5fa; border-radius: 50%; animation: spin 0.8s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    #modal-video::-webkit-media-controls { display: flex !important; }
+  </style>
+</head>
+<body class="min-h-screen">
+
+  <!-- Header -->
+  <header class="sticky top-0 z-40 bg-slate-900 border-b border-slate-700 px-4 py-3 flex items-center gap-3">
+    <svg class="w-6 h-6 text-blue-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+            d="M15 10l4.553-2.069A1 1 0 0121 8.882v6.236a1 1 0 01-1.447.894L15 14M3 8a2 2 0 012-2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V8z"/>
+    </svg>
+    <span class="font-semibold text-white">Event Timeline</span>
+    <span id="refresh-badge" class="ml-auto text-xs text-slate-400 hidden">
+      Updated just now
+    </span>
+    <button onclick="loadEvents()" title="Refresh"
+            class="text-slate-400 hover:text-white ml-2 p-1 rounded hover:bg-slate-700">
+      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+              d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+      </svg>
+    </button>
+  </header>
+
+  <!-- Filters -->
+  <div class="px-4 py-3 bg-slate-800 border-b border-slate-700 flex flex-wrap gap-2">
+    <!-- Camera pills -->
+    <button onclick="setCamera(null)" id="cam-all"
+            class="cam-pill px-3 py-1 text-xs rounded-full font-medium bg-blue-600 text-white">
+      All cameras
+    </button>
+    {% for cam in cameras %}
+    <button onclick="setCamera('{{ cam.id }}')" id="cam-{{ cam.id }}"
+            class="cam-pill px-3 py-1 text-xs rounded-full font-medium bg-slate-700 text-slate-300 hover:bg-slate-600">
+      {{ cam.display_name }}
+    </button>
+    {% endfor %}
+
+    <span class="w-px bg-slate-600 mx-1"></span>
+
+    <!-- Label pills -->
+    <button onclick="setLabel(null)" id="lbl-all"
+            class="lbl-pill px-3 py-1 text-xs rounded-full font-medium bg-blue-600 text-white">
+      All types
+    </button>
+    <button onclick="setLabel('person')" id="lbl-person"
+            class="lbl-pill px-3 py-1 text-xs rounded-full font-medium bg-slate-700 text-slate-300 hover:bg-slate-600">
+      Person
+    </button>
+    <button onclick="setLabel('car')" id="lbl-car"
+            class="lbl-pill px-3 py-1 text-xs rounded-full font-medium bg-slate-700 text-slate-300 hover:bg-slate-600">
+      Vehicle
+    </button>
+    <button onclick="setLabel('cat')" id="lbl-cat"
+            class="lbl-pill px-3 py-1 text-xs rounded-full font-medium bg-slate-700 text-slate-300 hover:bg-slate-600">
+      Animal
+    </button>
+  </div>
+
+  <!-- Event grid -->
+  <main class="p-4">
+    <div id="loading" class="flex justify-center items-center py-20 gap-3">
+      <div class="spinner w-6 h-6"></div>
+      <span class="text-slate-400 text-sm">Loading events…</span>
+    </div>
+    <div id="empty" class="hidden flex-col items-center py-20 text-slate-500 gap-3">
+      <svg class="w-12 h-12" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
+              d="M15 10l4.553-2.069A1 1 0 0121 8.882v6.236a1 1 0 01-1.447.894L15 14M3 8a2 2 0 012-2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V8z"/>
+      </svg>
+      <p class="text-sm font-medium">No events yet</p>
+      <p class="text-xs">Events will appear here once your cameras detect activity.</p>
+    </div>
+    <div id="error" class="hidden flex-col items-center py-20 text-slate-500 gap-3">
+      <svg class="w-12 h-12 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
+              d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
+      </svg>
+      <p class="text-sm font-medium text-red-400">Could not reach Frigate</p>
+      <p id="error-detail" class="text-xs text-center max-w-xs"></p>
+      <button onclick="loadEvents()"
+              class="mt-2 px-4 py-2 text-xs bg-slate-700 hover:bg-slate-600 rounded-lg">
+        Retry
+      </button>
+    </div>
+    <div id="grid" class="hidden grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4"></div>
+    <div id="load-more-wrap" class="hidden text-center pt-6 pb-2">
+      <button onclick="loadMore()"
+              class="px-5 py-2 text-sm bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-lg">
+        Load older events
+      </button>
+    </div>
+  </main>
+
+  <!-- Video modal -->
+  <div id="modal" class="fixed inset-0 z-50 hidden bg-black/80 flex items-center justify-center p-4"
+       onclick="closeModal(event)">
+    <div class="bg-slate-800 rounded-xl overflow-hidden max-w-2xl w-full shadow-2xl" onclick="event.stopPropagation()">
+      <div class="flex items-center justify-between px-4 py-3 border-b border-slate-700">
+        <div>
+          <p id="modal-title" class="font-semibold text-sm text-white"></p>
+          <p id="modal-sub" class="text-xs text-slate-400 mt-0.5"></p>
+        </div>
+        <button onclick="closeModal()" class="text-slate-400 hover:text-white p-1 rounded hover:bg-slate-700">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+          </svg>
+        </button>
+      </div>
+      <div class="bg-black">
+        <video id="modal-video" class="w-full max-h-96" controls autoplay playsinline
+               poster="" src="">
+          Your browser does not support HTML5 video.
+        </video>
+      </div>
+      <div class="px-4 py-3 flex gap-2 justify-end border-t border-slate-700">
+        <a id="modal-snapshot-link" href="#" target="_blank"
+           class="px-3 py-1.5 text-xs bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-lg">
+          Open snapshot
+        </a>
+        <a id="modal-clip-link" href="#" target="_blank"
+           class="px-3 py-1.5 text-xs bg-blue-700 hover:bg-blue-600 text-white rounded-lg">
+          Download clip
+        </a>
+      </div>
+    </div>
+  </div>
+
+<script>
+const FRIGATE_BASE = '/frigate';
+const PAGE_SIZE = 50;
+
+let activeCamera = null;
+let activeLabel = null;
+let lastBefore = null;  // timestamp cursor for pagination
+let allEvents = [];
+
+// ─── Filters ────────────────────────────────────────────────────────────────
+
+function setCamera(cam) {
+  activeCamera = cam;
+  document.querySelectorAll('.cam-pill').forEach(el => {
+    el.className = el.className.replace('bg-blue-600 text-white', 'bg-slate-700 text-slate-300');
+  });
+  const active = document.getElementById(cam ? `cam-${cam}` : 'cam-all');
+  if (active) active.className = active.className.replace('bg-slate-700 text-slate-300', 'bg-blue-600 text-white');
+  allEvents = [];
+  lastBefore = null;
+  loadEvents();
+}
+
+function setLabel(lbl) {
+  activeLabel = lbl;
+  document.querySelectorAll('.lbl-pill').forEach(el => {
+    el.className = el.className.replace('bg-blue-600 text-white', 'bg-slate-700 text-slate-300');
+  });
+  const active = document.getElementById(lbl ? `lbl-${lbl}` : 'lbl-all');
+  if (active) active.className = active.className.replace('bg-slate-700 text-slate-300', 'bg-blue-600 text-white');
+  allEvents = [];
+  lastBefore = null;
+  loadEvents();
+}
+
+// ─── API ────────────────────────────────────────────────────────────────────
+
+async function loadEvents() {
+  allEvents = [];
+  lastBefore = null;
+  show('loading');
+  try {
+    const events = await fetchPage();
+    allEvents = events;
+    render();
+  } catch (e) {
+    show('error');
+    document.getElementById('error-detail').textContent =
+      'Make sure Frigate is running. ' + (e.message || '');
+  }
+}
+
+async function loadMore() {
+  try {
+    const events = await fetchPage(lastBefore);
+    allEvents = allEvents.concat(events);
+    render();
+  } catch (e) { /* silently ignore load-more failures */ }
+}
+
+async function fetchPage(before = null) {
+  const params = new URLSearchParams({ limit: PAGE_SIZE, has_clip: 1 });
+  if (activeCamera) params.set('camera', activeCamera);
+  if (activeLabel)  params.set('label', activeLabel);
+  if (before)       params.set('before', before);
+  const res = await fetch(`${FRIGATE_BASE}/api/events?${params}`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return await res.json();
+}
+
+// ─── Render ─────────────────────────────────────────────────────────────────
+
+function render() {
+  if (!allEvents.length) {
+    show('empty');
+    return;
+  }
+  show('grid');
+  const grid = document.getElementById('grid');
+  grid.innerHTML = '';
+  allEvents.forEach(ev => grid.appendChild(buildCard(ev)));
+
+  // Set pagination cursor to oldest event
+  if (allEvents.length >= PAGE_SIZE) {
+    lastBefore = allEvents[allEvents.length - 1].start_time;
+    document.getElementById('load-more-wrap').classList.remove('hidden');
+  } else {
+    document.getElementById('load-more-wrap').classList.add('hidden');
+  }
+
+  // Update refresh badge
+  const badge = document.getElementById('refresh-badge');
+  badge.textContent = 'Updated just now';
+  badge.classList.remove('hidden');
+}
+
+function buildCard(ev) {
+  const card = document.createElement('div');
+  card.className = 'event-card bg-slate-800 rounded-xl overflow-hidden cursor-pointer border border-slate-700 hover:border-blue-500';
+
+  const snapshotUrl = `${FRIGATE_BASE}/api/events/${ev.id}/snapshot.jpg`;
+  const clipUrl     = `${FRIGATE_BASE}/api/events/${ev.id}/clip.mp4`;
+  const labelClass  = `label-${ev.label}` in document.styleSheets[0] ? `label-${ev.label}` : 'label-default';
+  const labelText   = formatLabel(ev.label);
+  const cameraText  = formatCamera(ev.camera);
+  const timeText    = formatTime(ev.start_time);
+
+  card.innerHTML = `
+    <div class="relative aspect-video bg-slate-900">
+      <img src="${snapshotUrl}" alt="${cameraText}" loading="lazy"
+           class="w-full h-full object-cover"
+           onerror="this.parentElement.classList.add('flex','items-center','justify-center'); this.remove();">
+      <span class="absolute top-2 left-2 px-2 py-0.5 text-xs font-bold text-white rounded-full label-${ev.label} bg-blue-700">${labelText}</span>
+      ${ev.has_clip ? `
+      <div class="absolute inset-0 flex items-center justify-center opacity-0 hover:opacity-100 transition-opacity bg-black/40">
+        <div class="w-12 h-12 bg-white/20 rounded-full flex items-center justify-center backdrop-blur">
+          <svg class="w-5 h-5 text-white ml-0.5" fill="currentColor" viewBox="0 0 24 24">
+            <path d="M8 5v14l11-7z"/>
+          </svg>
+        </div>
+      </div>` : ''}
+    </div>
+    <div class="px-3 py-2">
+      <p class="text-sm font-medium text-white truncate">${cameraText}</p>
+      <p class="text-xs text-slate-400 mt-0.5">${timeText}</p>
+    </div>
+  `;
+
+  if (ev.has_clip) {
+    card.addEventListener('click', () => openClip(ev.id, cameraText, labelText, ev.start_time, snapshotUrl, clipUrl));
+  }
+  return card;
+}
+
+// ─── Modal ──────────────────────────────────────────────────────────────────
+
+function openClip(id, camera, label, startTime, snapshotUrl, clipUrl) {
+  document.getElementById('modal-title').textContent = `${label} detected — ${camera}`;
+  document.getElementById('modal-sub').textContent = formatTime(startTime, true);
+  const video = document.getElementById('modal-video');
+  video.poster = snapshotUrl;
+  video.src = clipUrl;
+  document.getElementById('modal-snapshot-link').href = snapshotUrl;
+  document.getElementById('modal-clip-link').href = clipUrl;
+  document.getElementById('modal').classList.remove('hidden');
+  video.play().catch(() => {});
+}
+
+function closeModal(event) {
+  if (event && event.target !== document.getElementById('modal')) return;
+  const modal = document.getElementById('modal');
+  if (!modal.classList.contains('hidden')) {
+    modal.classList.add('hidden');
+    const video = document.getElementById('modal-video');
+    video.pause();
+    video.src = '';
+  }
+}
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') closeModal({ target: document.getElementById('modal') });
+});
+
+// ─── Helpers ────────────────────────────────────────────────────────────────
+
+function show(which) {
+  ['loading', 'empty', 'error', 'grid'].forEach(id => {
+    const el = document.getElementById(id);
+    if (id === which) {
+      el.classList.remove('hidden');
+      if (id === 'grid') el.classList.add('grid');
+    } else {
+      el.classList.add('hidden');
+      if (id === 'grid') el.classList.remove('grid');
+    }
+  });
+}
+
+function formatLabel(label) {
+  const map = { person: 'Person', car: 'Vehicle', cat: 'Cat', dog: 'Dog' };
+  return map[label] || label.charAt(0).toUpperCase() + label.slice(1);
+}
+
+function formatCamera(id) {
+  return id.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
+
+function formatTime(ts, full = false) {
+  const d = new Date(ts * 1000);
+  const now = Date.now();
+  const diff = Math.floor((now - d.getTime()) / 1000);
+  if (!full) {
+    if (diff < 60)   return 'Just now';
+    if (diff < 3600) return `${Math.floor(diff / 60)} min ago`;
+    if (diff < 86400) return `${Math.floor(diff / 3600)} hr ago`;
+  }
+  return d.toLocaleString(undefined, {
+    month: 'short', day: 'numeric',
+    hour: '2-digit', minute: '2-digit'
+  });
+}
+
+// ─── Init ────────────────────────────────────────────────────────────────────
+
+loadEvents();
+setInterval(() => {
+  if (!document.getElementById('modal').classList.contains('hidden')) return;
+  loadEvents();
+}, 30000);
+</script>
+</body>
+</html>

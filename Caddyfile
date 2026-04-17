@@ -11,6 +11,11 @@
         reverse_proxy localhost:3000
     }
 
+    # Custos event timeline — accessible at http://custos.local/events
+    route /events* {
+        reverse_proxy localhost:3000
+    }
+
     # Wizard static assets (thumbnails, CSS)
     route /thumbnails/* {
         reverse_proxy localhost:3000
