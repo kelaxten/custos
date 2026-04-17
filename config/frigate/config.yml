@@ -9,10 +9,11 @@
 # Frigate publishes all detection events here. Home Assistant subscribes to them.
 mqtt:
   enabled: true
-  host: mosquitto       # Docker service name — no need to change
+  host: 127.0.0.1
   port: 1883
   topic_prefix: frigate
-  # No auth needed for local MQTT (it's on the internal Docker network only)
+  user: "{FRIGATE_MQTT_USER}"
+  password: "{FRIGATE_MQTT_PASSWORD}"
 
 # ─── Detectors ────────────────────────────────────────────────────────────────
 # Pi 5 CPU detection works well for 2–3 cameras at sub-stream resolution.

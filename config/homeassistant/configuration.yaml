@@ -36,6 +36,8 @@ camera: !include cameras.yaml
 mqtt:
   broker: 127.0.0.1
   port: 1883
+  username: !secret mqtt_user
+  password: !secret mqtt_password
   discovery: true      # auto-discovers Frigate switches + sensors
   binary_sensor: !include mqtt_sensors.yaml
 
