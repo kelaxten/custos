@@ -17,19 +17,27 @@ http:
     - 172.16.0.0/12   # Docker bridge network range
 
 # ─── Integrations ─────────────────────────────────────────────────────────────
-# Enable the built-in HA frontend (the dashboard your spouse will use on their phone)
 frontend:
   themes: !include_dir_merge_named themes
 
-# Default config components
+# Lovelace in YAML mode — wizard generates ui-lovelace.yaml when cameras are configured.
+lovelace:
+  mode: yaml
+  resources: []
+
 default_config:
 
+# ─── Cameras ──────────────────────────────────────────────────────────────────
+# Generic camera entities that pull snapshots from the Frigate HTTP API.
+# Wizard overwrites cameras.yaml when cameras are configured.
+camera: !include cameras.yaml
+
 # ─── MQTT ─────────────────────────────────────────────────────────────────────
-# Connect HA to the local Mosquitto broker so it can receive Frigate events.
 mqtt:
-  broker: 127.0.0.1    # localhost because HA uses host networking
+  broker: 127.0.0.1
   port: 1883
-  discovery: true      # auto-discover Frigate entities via MQTT discovery
+  discovery: true      # auto-discovers Frigate switches + sensors
+  binary_sensor: !include mqtt_sensors.yaml
 
 # ─── Automations & Scripts ────────────────────────────────────────────────────
 automation: !include automations.yaml

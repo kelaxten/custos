@@ -313,6 +313,9 @@ async def finalize(request: Request):
             )
 
     config_writer.write_frigate_config(cameras)
+    config_writer.write_ha_cameras(cameras)
+    config_writer.write_mqtt_sensors(cameras)
+    config_writer.write_lovelace_dashboard(cameras)
     config_writer.write_ha_automations(cameras, state.get("notify_method", "companion"))
     config_writer.restart_frigate()
     config_writer.reload_ha()
