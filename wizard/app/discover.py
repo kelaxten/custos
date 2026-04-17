@@ -3,44 +3,45 @@ Camera discovery via WS-Discovery (ONVIF) and RTSP credential probing.
 
 Sends a UDP multicast probe per the WS-Discovery spec, collects responding
 device IPs, then probes each for RTSP stream URLs using known manufacturer
-patterns (Reolink, Hikvision, Dahua) before falling back to ONVIF GetStreamUri.
+patterns (Reolink, Hikvision, Dahua) before falling back to generic ONVIF.
 """
 
 import asyncio
+import ipaddress
 import re
 import socket
-import struct
 import uuid
-import xml.etree.ElementTree as ET
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
+
+import defusedxml.ElementTree as ET  # safe against XXE / billion-laughs
 
 MULTICAST_ADDR = "239.255.255.250"
 DISCOVERY_PORT = 3702
 PROBE_TIMEOUT = 5.0  # seconds to listen for responses
 
-# RTSP URL patterns keyed by manufacturer, ordered by sub/main.
-# {username} and {password} are substituted at runtime.
+# RTSP URL patterns ordered by sub/main stream.
+# {username} and {password} are substituted via urllib.parse.quote, not .format().
 KNOWN_RTSP_PATTERNS: list[dict] = [
     {
         "name": "Reolink",
-        "sub":  "rtsp://{username}:{password}@{ip}:554/h264Preview_01_sub",
-        "main": "rtsp://{username}:{password}@{ip}:554/h264Preview_01_main",
+        "sub":  "rtsp://{creds}@{ip}:554/h264Preview_01_sub",
+        "main": "rtsp://{creds}@{ip}:554/h264Preview_01_main",
     },
     {
         "name": "Hikvision",
-        "sub":  "rtsp://{username}:{password}@{ip}:554/Streaming/Channels/102",
-        "main": "rtsp://{username}:{password}@{ip}:554/Streaming/Channels/101",
+        "sub":  "rtsp://{creds}@{ip}:554/Streaming/Channels/102",
+        "main": "rtsp://{creds}@{ip}:554/Streaming/Channels/101",
     },
     {
         "name": "Dahua",
-        "sub":  "rtsp://{username}:{password}@{ip}:554/cam/realmonitor?channel=1&subtype=1",
-        "main": "rtsp://{username}:{password}@{ip}:554/cam/realmonitor?channel=1&subtype=0",
+        "sub":  "rtsp://{creds}@{ip}:554/cam/realmonitor?channel=1&subtype=1",
+        "main": "rtsp://{creds}@{ip}:554/cam/realmonitor?channel=1&subtype=0",
     },
     {
         "name": "Generic ONVIF",
-        "sub":  "rtsp://{username}:{password}@{ip}:554/stream2",
-        "main": "rtsp://{username}:{password}@{ip}:554/stream1",
+        "sub":  "rtsp://{creds}@{ip}:554/stream2",
+        "main": "rtsp://{creds}@{ip}:554/stream1",
     },
 ]
 
@@ -77,9 +78,38 @@ class DiscoveredDevice:
     authenticated: bool = False
 
 
+def is_routable_camera_ip(ip_str: str) -> bool:
+    """
+    Return True only for IPs that could plausibly be a camera.
+    Rejects loopback, link-local, multicast, and public internet addresses —
+    both to prevent SSRF and to avoid scanning hosts that aren't cameras.
+    """
+    try:
+        addr = ipaddress.ip_address(ip_str)
+    except ValueError:
+        return False
+    if addr.is_loopback or addr.is_link_local or addr.is_multicast:
+        return False
+    if addr.is_unspecified or addr.is_reserved:
+        return False
+    # Only allow RFC-1918 private ranges (camera networks)
+    private_ranges = [
+        ipaddress.ip_network("10.0.0.0/8"),
+        ipaddress.ip_network("172.16.0.0/12"),
+        ipaddress.ip_network("192.168.0.0/16"),
+    ]
+    return any(addr in net for net in private_ranges)
+
+
+def _encode_credentials(username: str, password: str) -> str:
+    """URL-encode username:password for embedding in an RTSP URL."""
+    from urllib.parse import quote
+    return f"{quote(username, safe='')}:{quote(password, safe='')}"
+
+
 async def scan_network() -> list[DiscoveredDevice]:
     """Send a WS-Discovery probe and return responding ONVIF devices."""
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     return await loop.run_in_executor(None, _ws_discovery_probe)
 
 
@@ -99,6 +129,8 @@ def _ws_discovery_probe() -> list[DiscoveredDevice]:
             data, addr = sock.recvfrom(4096)
             ip = addr[0]
             if ip in devices:
+                continue
+            if not is_routable_camera_ip(ip):
                 continue
             device = _parse_probe_match(data, ip)
             if device:
@@ -120,7 +152,11 @@ def _parse_probe_match(data: bytes, ip: str) -> Optional[DiscoveredDevice]:
             "dn": "http://www.onvif.org/ver10/network/wsdl",
         }
         xaddrs_el = root.find(".//d:XAddrs", ns)
-        onvif_url = xaddrs_el.text.split()[0] if xaddrs_el is not None and xaddrs_el.text else f"http://{ip}:80/onvif/device_service"
+        onvif_url = (
+            xaddrs_el.text.split()[0]
+            if xaddrs_el is not None and xaddrs_el.text
+            else f"http://{ip}:80/onvif/device_service"
+        )
         return DiscoveredDevice(ip=ip, onvif_url=onvif_url)
     except Exception:
         return DiscoveredDevice(ip=ip)
@@ -129,20 +165,21 @@ def _parse_probe_match(data: bytes, ip: str) -> Optional[DiscoveredDevice]:
 async def probe_credentials(
     device: DiscoveredDevice, username: str, password: str
 ) -> DiscoveredDevice:
-    """Try credentials against a device, populate RTSP URLs if they work."""
+    """Try credentials against a device; populate RTSP URLs on success."""
     device.username = username
     device.password = password
 
-    loop = asyncio.get_event_loop()
+    # Single reachability check before trying all URL patterns
+    loop = asyncio.get_running_loop()
+    reachable = await loop.run_in_executor(None, _test_rtsp_connect, device.ip)
+    if not reachable:
+        return device
+
+    creds = _encode_credentials(username, password)
     for pattern in KNOWN_RTSP_PATTERNS:
-        sub_url = pattern["sub"].format(username=username, password=password, ip=device.ip)
-        main_url = pattern["main"].format(username=username, password=password, ip=device.ip)
+        sub_url = pattern["sub"].format(creds=creds, ip=device.ip)
+        main_url = pattern["main"].format(creds=creds, ip=device.ip)
 
-        reachable = await loop.run_in_executor(None, _test_rtsp_connect, device.ip)
-        if not reachable:
-            break
-
-        # Try probing the sub-stream with a quick ffprobe
         ok = await _probe_rtsp(sub_url)
         if ok:
             device.rtsp_sub = sub_url
@@ -164,7 +201,7 @@ def _test_rtsp_connect(ip: str, port: int = 554, timeout: float = 2.0) -> bool:
 
 
 async def _probe_rtsp(url: str, timeout: float = 6.0) -> bool:
-    """Use ffprobe to check if an RTSP URL is accessible with the given credentials."""
+    """Use ffprobe to verify an RTSP URL is reachable with the given credentials."""
     proc = await asyncio.create_subprocess_exec(
         "ffprobe",
         "-v", "quiet",

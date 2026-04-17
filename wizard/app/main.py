@@ -15,18 +15,16 @@ Routes:
   POST /setup/finalize   Write all configs, restart services
   GET  /setup/done       Success screen
 
-State is stored in a JSON file on the container's /tmp so it survives between
-requests but is reset when the container restarts.
+State is stored in a JSON file on the container's /tmp — simple and sufficient
+for a one-shot setup flow that resets on container restart.
 """
 
 import asyncio
 import json
-import os
-import subprocess
 from pathlib import Path
-from typing import Annotated
+from urllib.parse import quote as urlquote
 
-from fastapi import BackgroundTasks, FastAPI, Form, Request
+from fastapi import BackgroundTasks, FastAPI, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -37,23 +35,24 @@ import thumbnails
 
 app = FastAPI(docs_url=None, redoc_url=None)
 
+_APP_DIR = Path(__file__).parent
 THUMB_DIR = thumbnails.THUMB_DIR
+THUMB_DIR.mkdir(parents=True, exist_ok=True)
 app.mount("/thumbnails", StaticFiles(directory=str(THUMB_DIR)), name="thumbnails")
-app.mount("/static", StaticFiles(directory="static"), name="static")
+app.mount("/static", StaticFiles(directory=str(_APP_DIR / "static")), name="static")
 
-templates = Jinja2Templates(directory="templates")
+templates = Jinja2Templates(directory=str(_APP_DIR / "templates"))
 templates.env.filters["enumerate"] = enumerate
 
 # ─── Wizard state ─────────────────────────────────────────────────────────────
-# Simple JSON file on /tmp — good enough for a one-shot setup process.
 
 STATE_FILE = Path("/tmp/custos-wizard-state.json")
 
-_DEFAULT_STATE = {
+_DEFAULT_STATE: dict = {
     "scan_status": "idle",   # idle | scanning | done | error
-    "discovered": [],        # list of {ip, manufacturer} from WS-Discovery
-    "cameras": [],           # confirmed cameras with names + credentials
-    "detection": {},         # {camera_id: {person, car, animal}}
+    "discovered": [],
+    "cameras": [],
+    "detection": {},
     "notify_method": "companion",
     "tailscale_done": False,
     "finalized": False,
@@ -62,7 +61,10 @@ _DEFAULT_STATE = {
 
 def _load() -> dict:
     if STATE_FILE.exists():
-        return json.loads(STATE_FILE.read_text())
+        try:
+            return json.loads(STATE_FILE.read_text())
+        except (json.JSONDecodeError, OSError):
+            pass
     return dict(_DEFAULT_STATE)
 
 
@@ -75,7 +77,7 @@ def _reset() -> dict:
     return dict(_DEFAULT_STATE)
 
 
-# ─── Background scan task ─────────────────────────────────────────────────────
+# ─── Background scan ──────────────────────────────────────────────────────────
 
 async def _run_scan() -> None:
     state = _load()
@@ -95,6 +97,38 @@ async def _run_scan() -> None:
         state["scan_error"] = str(exc)
 
     _save(state)
+
+
+# ─── Helpers ──────────────────────────────────────────────────────────────────
+
+def _deduplicated_id(base_id: str, existing_ids: set[str]) -> str:
+    """Append a numeric suffix if base_id is already taken."""
+    if base_id not in existing_ids:
+        return base_id
+    n = 2
+    while f"{base_id}_{n}" in existing_ids:
+        n += 1
+    return f"{base_id}_{n}"
+
+
+def _safe_rtsp_url(username: str, password: str, ip: str, path: str) -> str:
+    """Build an RTSP URL with URL-encoded credentials."""
+    creds = f"{urlquote(username, safe='')}:{urlquote(password, safe='')}"
+    return f"rtsp://{creds}@{ip}:554/{path}"
+
+
+async def _check_tailscale() -> bool:
+    """Non-blocking check for Tailscale being installed and connected."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "tailscale", "status", "--json",
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        await asyncio.wait_for(proc.communicate(), timeout=3.0)
+        return proc.returncode == 0
+    except Exception:
+        return False
 
 
 # ─── Routes ───────────────────────────────────────────────────────────────────
@@ -124,18 +158,15 @@ async def start_scan(background_tasks: BackgroundTasks):
 
 @app.get("/setup/scan/poll", response_class=HTMLResponse)
 async def poll_scan(request: Request):
-    """HTMX polling endpoint. Returns spinner or camera cards."""
     state = _load()
     status = state["scan_status"]
 
     if status == "scanning":
-        # Return a spinner fragment; HTMX will re-poll in 2s
         return templates.TemplateResponse("_scan_polling.html", {
             "request": request,
             "status": status,
         })
 
-    # Done or error — return the cameras step
     return templates.TemplateResponse("step2_cameras.html", {
         "request": request,
         "discovered": state.get("discovered", []),
@@ -145,74 +176,77 @@ async def poll_scan(request: Request):
 
 @app.post("/setup/cameras")
 async def save_cameras(request: Request, background_tasks: BackgroundTasks):
-    """
-    Receives the camera form (name, IP, username, password per camera).
-    Probes credentials, captures thumbnails, then goes to step 3.
-    """
     form = await request.form()
 
-    # Collect camera entries from the flat form data.
-    # Form fields are: cam_0_name, cam_0_ip, cam_0_username, cam_0_password, etc.
     cameras_raw: list[dict] = []
+
+    def _collect(prefix: str, idx: int) -> dict | None:
+        ip = form.get(f"{prefix}{idx}_ip", "").strip()
+        if not ip:
+            return None
+        if not discover.is_routable_camera_ip(ip):
+            return None  # silently skip invalid/non-private IPs
+        return {
+            "ip": ip,
+            "display_name": form.get(f"{prefix}{idx}_name", f"Camera {idx + 1}").strip() or f"Camera {idx + 1}",
+            "username": form.get(f"{prefix}{idx}_username", "admin").strip() or "admin",
+            "password": form.get(f"{prefix}{idx}_password", "").strip(),
+        }
+
     idx = 0
     while f"cam_{idx}_ip" in form:
-        ip = form.get(f"cam_{idx}_ip", "").strip()
-        name = form.get(f"cam_{idx}_name", f"Camera {idx + 1}").strip()
-        username = form.get(f"cam_{idx}_username", "admin").strip()
-        password = form.get(f"cam_{idx}_password", "").strip()
-        if ip:
-            cameras_raw.append({
-                "ip": ip,
-                "display_name": name,
-                "id": discover.slugify(name),
-                "username": username,
-                "password": password,
-            })
+        entry = _collect("cam_", idx)
+        if entry:
+            cameras_raw.append(entry)
         idx += 1
 
-    # Also handle manually-added cameras (from "Add camera manually" button)
     manual_idx = 0
     while f"manual_{manual_idx}_ip" in form:
-        ip = form.get(f"manual_{manual_idx}_ip", "").strip()
-        name = form.get(f"manual_{manual_idx}_name", f"Camera").strip()
-        username = form.get(f"manual_{manual_idx}_username", "admin").strip()
-        password = form.get(f"manual_{manual_idx}_password", "").strip()
-        if ip:
-            cameras_raw.append({
-                "ip": ip,
-                "display_name": name,
-                "id": discover.slugify(name),
-                "username": username,
-                "password": password,
-            })
+        entry = _collect("manual_", manual_idx)
+        if entry:
+            cameras_raw.append(entry)
         manual_idx += 1
 
-    # Probe credentials and resolve RTSP URLs
-    enriched = []
-    for cam in cameras_raw:
+    # Probe credentials in parallel (all cameras simultaneously)
+    async def _probe(cam: dict) -> dict:
         device = discover.DiscoveredDevice(ip=cam["ip"])
         device = await discover.probe_credentials(device, cam["username"], cam["password"])
-
-        enriched.append({
+        return {
             **cam,
             "rtsp_sub": device.rtsp_sub,
             "rtsp_main": device.rtsp_main,
             "manufacturer": device.manufacturer,
             "authenticated": device.authenticated,
             "thumb_url": thumbnails.PLACEHOLDER,
-        })
+        }
 
-    # Capture thumbnails in background (don't block the response)
-    async def _fetch_thumbs():
-        state = _load()
-        for cam in state["cameras"]:
-            if cam.get("rtsp_sub"):
-                cam["thumb_url"] = await thumbnails.capture(cam["rtsp_sub"])
-        _save(state)
+    enriched_list = await asyncio.gather(*[_probe(c) for c in cameras_raw])
+
+    # Assign deduplicated slugged IDs
+    used_ids: set[str] = set()
+    enriched: list[dict] = []
+    for cam in enriched_list:
+        base_id = discover.slugify(cam["display_name"])
+        cam["id"] = _deduplicated_id(base_id, used_ids)
+        used_ids.add(cam["id"])
+        enriched.append(cam)
 
     state = _load()
     state["cameras"] = enriched
     _save(state)
+
+    # Capture thumbnails asynchronously — state is re-read inside to avoid races
+    async def _fetch_thumbs() -> None:
+        current = _load()
+        updated = False
+        for cam in current["cameras"]:
+            if cam.get("rtsp_sub"):
+                url = await thumbnails.capture(cam["rtsp_sub"])
+                if url != cam.get("thumb_url"):
+                    cam["thumb_url"] = url
+                    updated = True
+        if updated:
+            _save(current)
 
     background_tasks.add_task(_fetch_thumbs)
 
@@ -244,7 +278,6 @@ async def save_detect(request: Request):
             "animal": form.get(f"{cid}_animal") == "on",
         }
     state["detection"] = detection
-    # Merge detection prefs back into cameras list for config_writer
     for cam in state["cameras"]:
         prefs = detection.get(cam["id"], {})
         cam["detect_person"] = prefs.get("person", True)
@@ -269,7 +302,10 @@ async def step4_notify(request: Request):
 async def save_notify(request: Request):
     form = await request.form()
     state = _load()
-    state["notify_method"] = form.get("method", "companion")
+    method = form.get("method", "companion")
+    if method not in ("companion", "ntfy", "skip"):
+        method = "companion"
+    state["notify_method"] = method
     _save(state)
     return RedirectResponse("/setup/remote", status_code=303)
 
@@ -280,7 +316,7 @@ async def step5_remote(request: Request):
     if not state.get("cameras"):
         return RedirectResponse("/setup", status_code=303)
 
-    tailscale_installed = _check_tailscale()
+    tailscale_installed = await _check_tailscale()
     return templates.TemplateResponse("step5_remote.html", {
         "request": request,
         "tailscale_installed": tailscale_installed,
@@ -289,28 +325,27 @@ async def step5_remote(request: Request):
 
 @app.post("/setup/finalize")
 async def finalize(request: Request):
-    """Write all configs and restart services."""
-    form = await request.form()
     state = _load()
-
     cameras = state.get("cameras", [])
     if not cameras:
         return RedirectResponse("/setup", status_code=303)
 
-    # Write .env password (use first camera's password as the shared credential)
+    # Persist camera password to .env
     first_pw = cameras[0].get("password", "")
     if first_pw:
         config_writer.write_camera_password(first_pw)
 
-    # Resolve any cameras that didn't get RTSP URLs (fall back to known Reolink pattern)
+    # Fill in any cameras that didn't get RTSP URLs from probing
     for cam in cameras:
         if not cam.get("rtsp_sub"):
-            cam["rtsp_sub"] = (
-                f"rtsp://{cam['username']}:{cam['password']}@{cam['ip']}:554/h264Preview_01_sub"
+            cam["rtsp_sub"] = _safe_rtsp_url(
+                cam["username"], cam["password"], cam["ip"], "h264Preview_01_sub"
             )
-            cam["rtsp_main"] = (
-                f"rtsp://{cam['username']}:{cam['password']}@{cam['ip']}:554/h264Preview_01_main"
+            cam["rtsp_main"] = _safe_rtsp_url(
+                cam["username"], cam["password"], cam["ip"], "h264Preview_01_main"
             )
+        # Invalidate any stale thumbnail so the new credentials are used next time
+        thumbnails.invalidate(cam["rtsp_sub"])
 
     config_writer.write_frigate_config(cameras)
     config_writer.write_ha_cameras(cameras)
@@ -318,9 +353,9 @@ async def finalize(request: Request):
     config_writer.write_lovelace_dashboard(cameras)
     config_writer.write_ha_automations(cameras, state.get("notify_method", "companion"))
     config_writer.restart_frigate()
-    config_writer.reload_ha()
 
     state["finalized"] = True
+    state["cameras"] = cameras
     _save(state)
 
     return RedirectResponse("/setup/done", status_code=303)
@@ -334,16 +369,3 @@ async def done(request: Request):
         "request": request,
         "cameras": cameras,
     })
-
-
-# ─── Helpers ──────────────────────────────────────────────────────────────────
-
-def _check_tailscale() -> bool:
-    try:
-        result = subprocess.run(
-            ["tailscale", "status", "--json"],
-            capture_output=True, timeout=3,
-        )
-        return result.returncode == 0
-    except Exception:
-        return False

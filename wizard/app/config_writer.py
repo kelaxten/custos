@@ -61,8 +61,11 @@ def build_camera_block(cam: dict) -> dict:
 
 
 def write_frigate_config(cameras: list[dict]) -> None:
-    with open(FRIGATE_CONFIG) as f:
-        config = yaml.safe_load(f)
+    try:
+        with open(FRIGATE_CONFIG) as f:
+            config = yaml.safe_load(f) or {}
+    except FileNotFoundError:
+        config = {}
 
     config["cameras"] = {cam["id"]: build_camera_block(cam) for cam in cameras}
 
@@ -72,19 +75,74 @@ def write_frigate_config(cameras: list[dict]) -> None:
 
 # ─── Home Assistant automations ───────────────────────────────────────────────
 
-def _person_automation(cameras: list[dict]) -> dict:
+def _detection_action(label: str, event_id_var: str, camera_var: str, camera_pretty_var: str) -> list:
+    """
+    Build an action list that:
+    1. Always creates a persistent notification visible in the HA UI.
+    2. Additionally notifies via the mobile_app group if the user has set one up
+       (the service call is wrapped in a condition so it doesn't fail if absent).
+    """
+    snapshot_url = f"http://localhost:5000/api/events/{{{{{event_id_var}}}}}/snapshot.jpg"
+    frigate_url = f"http://custos.local/frigate/events/{{{{{event_id_var}}}}}"
+    title = f"{label.capitalize()} Detected"
+
+    return [
+        # Persistent notification — always works, shows in HA sidebar
+        {
+            "service": "persistent_notification.create",
+            "data": {
+                "title": title,
+                "message": (
+                    f"{{{{ {camera_pretty_var} }}}} · "
+                    f"[View clip]({frigate_url})"
+                ),
+                "notification_id": f"custos_{label}_{{{{ {camera_var} }}}}",
+            },
+        },
+        # Mobile Companion app — fires only when notify.mobile_app group exists.
+        # Create a group named 'mobile_app_all_devices' in HA Settings → Notifications
+        # to start receiving push notifications on your phones.
+        {
+            "choose": [
+                {
+                    "conditions": [{
+                        "condition": "template",
+                        "value_template": "{{ states.notify.mobile_app_all_devices is not none }}",
+                    }],
+                    "sequence": [{
+                        "service": "notify.mobile_app_all_devices",
+                        "data": {
+                            "title": title,
+                            "message": f"{{{{ {camera_pretty_var} }}}}",
+                            "data": {
+                                "image": snapshot_url,
+                                "url": frigate_url,
+                                "channel": "custos-alerts",
+                                "tag": f"custos-{label}-{{{{ {camera_var} }}}}",
+                                "importance": "high",
+                                "ttl": 0,
+                            },
+                        },
+                    }],
+                }
+            ]
+        },
+    ]
+
+
+def _detection_automation(label: str, score_threshold: float = 0.75) -> dict:
     return {
-        "id": "custos_person_detected",
-        "alias": "Person Detected — Push Notification",
+        "id": f"custos_{label}_detected",
+        "alias": f"{label.capitalize()} Detected",
         "mode": "parallel",
         "max": 10,
         "trigger": [{"platform": "mqtt", "topic": "frigate/events"}],
         "condition": [{
             "condition": "template",
             "value_template": (
-                "{{ trigger.payload_json.type == 'new'"
-                " and trigger.payload_json.after.label == 'person'"
-                " and trigger.payload_json.after.score | float >= 0.75 }}"
+                f"{{{{ trigger.payload_json.type == 'new'"
+                f" and trigger.payload_json.after.label == '{label}'"
+                f" and trigger.payload_json.after.score | float >= {score_threshold} }}}}"
             ),
         }],
         "action": [
@@ -95,67 +153,16 @@ def _person_automation(cameras: list[dict]) -> dict:
                     "event_id": "{{ trigger.payload_json.after.id }}",
                 }
             },
-            {
-                "service": "notify.mobile_app_all_devices",
-                "data": {
-                    "title": "Person Detected",
-                    "message": "{{ camera_pretty }}",
-                    "data": {
-                        "image": "http://127.0.0.1:5000/api/events/{{ event_id }}/snapshot.jpg",
-                        "url": "http://custos.local/frigate/events/{{ event_id }}",
-                        "channel": "custos-alerts",
-                        "tag": "custos-person-{{ camera }}",
-                        "importance": "high",
-                        "ttl": 0,
-                    },
-                },
-            },
-        ],
-    }
-
-
-def _vehicle_automation(cameras: list[dict]) -> dict:
-    return {
-        "id": "custos_vehicle_detected",
-        "alias": "Vehicle Detected — Push Notification",
-        "mode": "parallel",
-        "max": 10,
-        "trigger": [{"platform": "mqtt", "topic": "frigate/events"}],
-        "condition": [{
-            "condition": "template",
-            "value_template": (
-                "{{ trigger.payload_json.type == 'new'"
-                " and trigger.payload_json.after.label == 'car'"
-                " and trigger.payload_json.after.score | float >= 0.75 }}"
-            ),
-        }],
-        "action": [
-            {
-                "variables": {
-                    "camera": "{{ trigger.payload_json.after.camera }}",
-                    "camera_pretty": "{{ trigger.payload_json.after.camera | replace('_', ' ') | title }}",
-                    "event_id": "{{ trigger.payload_json.after.id }}",
-                }
-            },
-            {
-                "service": "notify.mobile_app_all_devices",
-                "data": {
-                    "title": "Vehicle Detected",
-                    "message": "{{ camera_pretty }}",
-                    "data": {
-                        "image": "http://127.0.0.1:5000/api/events/{{ event_id }}/snapshot.jpg",
-                        "url": "http://custos.local/frigate/events/{{ event_id }}",
-                        "channel": "custos-alerts",
-                        "tag": "custos-vehicle-{{ camera }}",
-                    },
-                },
-            },
+            *_detection_action(label, "event_id", "camera", "camera_pretty"),
         ],
     }
 
 
 def write_ha_automations(cameras: list[dict], notify_method: str = "companion") -> None:
-    automations = [_person_automation(cameras), _vehicle_automation(cameras)]
+    automations = [
+        _detection_automation("person"),
+        _detection_automation("car"),
+    ]
     out = HA_CONFIG_DIR / "automations.yaml"
     with open(out, "w") as f:
         yaml.dump(automations, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
@@ -366,29 +373,14 @@ def is_already_configured() -> bool:
 
 
 def restart_frigate() -> None:
-    """Signal Frigate to reload its config via its HTTP API."""
+    """Ask Frigate to restart so it picks up the new config file."""
     import urllib.request
     try:
         req = urllib.request.Request(
-            "http://frigate:5000/api/config/save",
+            "http://localhost:5000/api/restart",
             method="POST",
         )
         urllib.request.urlopen(req, timeout=5)
     except Exception:
-        pass  # Frigate will pick up the new config on its next health cycle
-
-
-def reload_ha() -> None:
-    """Ask Home Assistant to reload automations."""
-    import urllib.request, json
-    try:
-        data = json.dumps({}).encode()
-        req = urllib.request.Request(
-            "http://127.0.0.1:8123/api/services/automation/reload",
-            data=data,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        urllib.request.urlopen(req, timeout=5)
-    except Exception:
+        # Non-fatal: Frigate will reload on next container restart.
         pass

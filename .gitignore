@@ -1,5 +1,7 @@
 # Never commit secrets or local state
 .env
+config/homeassistant/secrets.yaml
+config/mosquitto/passwd
 
 # Home Assistant generates these at runtime
 config/homeassistant/.storage/
@@ -14,3 +16,5 @@ config/frigate/model_cache/
 # Editor
 .DS_Store
 *.swp
+wizard/app/__pycache__/
+wizard/tests/__pycache__/
