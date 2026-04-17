@@ -1,0 +1,188 @@
+"""
+Camera discovery via WS-Discovery (ONVIF) and RTSP credential probing.
+
+Sends a UDP multicast probe per the WS-Discovery spec, collects responding
+device IPs, then probes each for RTSP stream URLs using known manufacturer
+patterns (Reolink, Hikvision, Dahua) before falling back to ONVIF GetStreamUri.
+"""
+
+import asyncio
+import re
+import socket
+import struct
+import uuid
+import xml.etree.ElementTree as ET
+from dataclasses import dataclass, field
+from typing import Optional
+
+MULTICAST_ADDR = "239.255.255.250"
+DISCOVERY_PORT = 3702
+PROBE_TIMEOUT = 5.0  # seconds to listen for responses
+
+# RTSP URL patterns keyed by manufacturer, ordered by sub/main.
+# {username} and {password} are substituted at runtime.
+KNOWN_RTSP_PATTERNS: list[dict] = [
+    {
+        "name": "Reolink",
+        "sub":  "rtsp://{username}:{password}@{ip}:554/h264Preview_01_sub",
+        "main": "rtsp://{username}:{password}@{ip}:554/h264Preview_01_main",
+    },
+    {
+        "name": "Hikvision",
+        "sub":  "rtsp://{username}:{password}@{ip}:554/Streaming/Channels/102",
+        "main": "rtsp://{username}:{password}@{ip}:554/Streaming/Channels/101",
+    },
+    {
+        "name": "Dahua",
+        "sub":  "rtsp://{username}:{password}@{ip}:554/cam/realmonitor?channel=1&subtype=1",
+        "main": "rtsp://{username}:{password}@{ip}:554/cam/realmonitor?channel=1&subtype=0",
+    },
+    {
+        "name": "Generic ONVIF",
+        "sub":  "rtsp://{username}:{password}@{ip}:554/stream2",
+        "main": "rtsp://{username}:{password}@{ip}:554/stream1",
+    },
+]
+
+WS_DISCOVERY_PROBE = """\
+<?xml version="1.0" encoding="utf-8"?>
+<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"
+            xmlns:a="http://schemas.xmlsoap.org/ws/2004/08/addressing"
+            xmlns:d="http://schemas.xmlsoap.org/ws/2005/04/discovery"
+            xmlns:dn="http://www.onvif.org/ver10/network/wsdl">
+  <s:Header>
+    <a:MessageID>uuid:{message_id}</a:MessageID>
+    <a:To>urn:schemas-xmlsoap-org:ws:2005:04:discovery</a:To>
+    <a:Action>http://schemas.xmlsoap.org/ws/2005/04/discovery/Probe</a:Action>
+  </s:Header>
+  <s:Body>
+    <d:Probe>
+      <d:Types>dn:NetworkVideoTransmitter</d:Types>
+    </d:Probe>
+  </s:Body>
+</s:Envelope>"""
+
+
+@dataclass
+class DiscoveredDevice:
+    ip: str
+    onvif_url: str = ""
+    manufacturer: str = "Unknown"
+    model: str = ""
+    # Populated after credential probe
+    username: str = "admin"
+    password: str = ""
+    rtsp_sub: str = ""
+    rtsp_main: str = ""
+    authenticated: bool = False
+
+
+async def scan_network() -> list[DiscoveredDevice]:
+    """Send a WS-Discovery probe and return responding ONVIF devices."""
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, _ws_discovery_probe)
+
+
+def _ws_discovery_probe() -> list[DiscoveredDevice]:
+    probe = WS_DISCOVERY_PROBE.format(message_id=str(uuid.uuid4())).encode()
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 2)
+    sock.settimeout(PROBE_TIMEOUT)
+
+    sock.sendto(probe, (MULTICAST_ADDR, DISCOVERY_PORT))
+
+    devices: dict[str, DiscoveredDevice] = {}
+    try:
+        while True:
+            data, addr = sock.recvfrom(4096)
+            ip = addr[0]
+            if ip in devices:
+                continue
+            device = _parse_probe_match(data, ip)
+            if device:
+                devices[ip] = device
+    except socket.timeout:
+        pass
+    finally:
+        sock.close()
+
+    return list(devices.values())
+
+
+def _parse_probe_match(data: bytes, ip: str) -> Optional[DiscoveredDevice]:
+    try:
+        root = ET.fromstring(data.decode(errors="replace"))
+        ns = {
+            "s": "http://www.w3.org/2003/05/soap-envelope",
+            "d": "http://schemas.xmlsoap.org/ws/2005/04/discovery",
+            "dn": "http://www.onvif.org/ver10/network/wsdl",
+        }
+        xaddrs_el = root.find(".//d:XAddrs", ns)
+        onvif_url = xaddrs_el.text.split()[0] if xaddrs_el is not None and xaddrs_el.text else f"http://{ip}:80/onvif/device_service"
+        return DiscoveredDevice(ip=ip, onvif_url=onvif_url)
+    except Exception:
+        return DiscoveredDevice(ip=ip)
+
+
+async def probe_credentials(
+    device: DiscoveredDevice, username: str, password: str
+) -> DiscoveredDevice:
+    """Try credentials against a device, populate RTSP URLs if they work."""
+    device.username = username
+    device.password = password
+
+    loop = asyncio.get_event_loop()
+    for pattern in KNOWN_RTSP_PATTERNS:
+        sub_url = pattern["sub"].format(username=username, password=password, ip=device.ip)
+        main_url = pattern["main"].format(username=username, password=password, ip=device.ip)
+
+        reachable = await loop.run_in_executor(None, _test_rtsp_connect, device.ip)
+        if not reachable:
+            break
+
+        # Try probing the sub-stream with a quick ffprobe
+        ok = await _probe_rtsp(sub_url)
+        if ok:
+            device.rtsp_sub = sub_url
+            device.rtsp_main = main_url
+            device.manufacturer = pattern["name"]
+            device.authenticated = True
+            return device
+
+    return device
+
+
+def _test_rtsp_connect(ip: str, port: int = 554, timeout: float = 2.0) -> bool:
+    """Quick TCP connect check to RTSP port before spending time on stream probe."""
+    try:
+        with socket.create_connection((ip, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+async def _probe_rtsp(url: str, timeout: float = 6.0) -> bool:
+    """Use ffprobe to check if an RTSP URL is accessible with the given credentials."""
+    proc = await asyncio.create_subprocess_exec(
+        "ffprobe",
+        "-v", "quiet",
+        "-rtsp_transport", "tcp",
+        "-i", url,
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    try:
+        await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        return proc.returncode == 0
+    except asyncio.TimeoutError:
+        proc.kill()
+        return False
+
+
+def slugify(name: str) -> str:
+    """Turn a display name into a Frigate camera ID slug."""
+    slug = name.lower().strip()
+    slug = re.sub(r"[^a-z0-9]+", "_", slug)
+    return slug.strip("_") or "camera"

@@ -78,6 +78,28 @@ services:
     networks:
       - custos
 
+  # ─── Setup Wizard ─────────────────────────────────────────────────────────────
+  # Browser-based 5-screen setup: camera discovery → naming → detection → notifications → remote access.
+  # Writes Frigate/HA configs and restarts services. Always accessible at custos.local/setup.
+  wizard:
+    build: ./wizard
+    container_name: custos-wizard
+    restart: unless-stopped
+    network_mode: host        # needs to reach frigate:5000 and ha:8123 on localhost
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - ./config/frigate:/config/frigate
+      - ./config/homeassistant:/config/homeassistant
+      - ./.env:/custos/.env
+    environment:
+      FRIGATE_CONFIG: /config/frigate/config.yml
+      HA_CONFIG_DIR: /config/homeassistant
+      ENV_FILE: /custos/.env
+      THUMB_DIR: /tmp/custos-thumbnails
+    depends_on:
+      - frigate
+      - homeassistant
+
   # ─── Caddy reverse proxy ──────────────────────────────────────────────────
   # Serves custos.local — routes to HA dashboard and Frigate UI.
   # Automatic HTTPS for remote access (if you have a domain).

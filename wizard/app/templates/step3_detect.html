@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+{% set step = 3 %}
+{% block title_suffix %} — What to Watch For{% endblock %}
+
+{% block content %}
+<h1 class="text-2xl font-bold text-slate-900 mb-1">What should I watch for?</h1>
+<p class="text-slate-500 mb-6">Choose what triggers a notification for each camera. You can change these anytime.</p>
+
+<form method="post" action="/setup/detect">
+  {% for cam in cameras %}
+  {% set cid = cam.id %}
+  {% set prefs = detection.get(cid, {}) %}
+
+  <div class="bg-white border border-slate-200 rounded-2xl p-5 mb-4">
+
+    <!-- Camera header with thumbnail -->
+    <div class="flex items-center gap-3 mb-5">
+      {% if cam.thumb_url and cam.thumb_url != '/static/camera-placeholder.svg' %}
+      <img src="{{ cam.thumb_url }}" alt="{{ cam.display_name }}"
+           class="w-16 h-12 object-cover rounded-xl bg-slate-100">
+      {% else %}
+      <div class="w-16 h-12 rounded-xl bg-slate-100 flex items-center justify-center text-2xl">📷</div>
+      {% endif %}
+      <div>
+        <p class="font-semibold text-slate-800">{{ cam.display_name }}</p>
+        <p class="text-xs text-slate-400">{{ cam.ip }}</p>
+      </div>
+    </div>
+
+    <!-- Detection toggles -->
+    <div class="space-y-3">
+
+      <label class="flex items-center justify-between cursor-pointer">
+        <div class="flex items-center gap-3">
+          <span class="text-2xl">🧍</span>
+          <div>
+            <p class="font-medium text-slate-800">People</p>
+            <p class="text-xs text-slate-400">Alert when a person is detected</p>
+          </div>
+        </div>
+        <input type="checkbox" name="{{ cid }}_person" class="sr-only peer"
+               {% if prefs.get('person', True) %}checked{% endif %}>
+        <div class="w-12 h-6 bg-slate-200 peer-checked:bg-brand rounded-full relative transition-colors
+                    after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:w-5 after:h-5
+                    after:bg-white after:rounded-full after:shadow after:transition-all
+                    peer-checked:after:translate-x-6"></div>
+      </label>
+
+      <label class="flex items-center justify-between cursor-pointer">
+        <div class="flex items-center gap-3">
+          <span class="text-2xl">🚗</span>
+          <div>
+            <p class="font-medium text-slate-800">Vehicles</p>
+            <p class="text-xs text-slate-400">Alert when a car is detected</p>
+          </div>
+        </div>
+        <input type="checkbox" name="{{ cid }}_car" class="sr-only peer"
+               {% if prefs.get('car', True) %}checked{% endif %}>
+        <div class="w-12 h-6 bg-slate-200 peer-checked:bg-brand rounded-full relative transition-colors
+                    after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:w-5 after:h-5
+                    after:bg-white after:rounded-full after:shadow after:transition-all
+                    peer-checked:after:translate-x-6"></div>
+      </label>
+
+      <label class="flex items-center justify-between cursor-pointer">
+        <div class="flex items-center gap-3">
+          <span class="text-2xl">🐾</span>
+          <div>
+            <p class="font-medium text-slate-800">Animals</p>
+            <p class="text-xs text-slate-400">Alert when a pet or animal is detected</p>
+          </div>
+        </div>
+        <input type="checkbox" name="{{ cid }}_animal" class="sr-only peer"
+               {% if prefs.get('animal', False) %}checked{% endif %}>
+        <div class="w-12 h-6 bg-slate-200 peer-checked:bg-brand rounded-full relative transition-colors
+                    after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:w-5 after:h-5
+                    after:bg-white after:rounded-full after:shadow after:transition-all
+                    peer-checked:after:translate-x-6"></div>
+      </label>
+
+    </div>
+  </div>
+  {% endfor %}
+
+  <button type="submit"
+          class="w-full bg-brand hover:bg-brand-dark text-white font-semibold py-4 px-6 rounded-2xl text-lg transition-colors shadow-sm">
+    Continue →
+  </button>
+</form>
+{% endblock %}

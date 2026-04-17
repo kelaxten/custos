@@ -1,0 +1,120 @@
+{% extends "base.html" %}
+{% set step = 2 %}
+{% block title_suffix %} — Your Cameras{% endblock %}
+
+{% block content %}
+<h1 class="text-2xl font-bold text-slate-900 mb-1">Your Cameras</h1>
+
+{% if error %}
+<div class="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-5 text-sm text-amber-800">
+  <strong>Scan encountered an issue:</strong> {{ error }}<br>
+  You can still add cameras manually below.
+</div>
+{% elif discovered %}
+<p class="text-slate-500 mb-6">We found {{ discovered|length }} camera{{ 's' if discovered|length != 1 else '' }} on your network. Enter the password for each one.</p>
+{% else %}
+<p class="text-slate-500 mb-6">No cameras were found automatically. Enter your camera's IP address below.</p>
+{% endif %}
+
+<form method="post" action="/setup/cameras" id="camera-form">
+
+  <!-- Discovered cameras -->
+  {% for idx, cam in discovered | enumerate %}
+  <div class="bg-white border border-slate-200 rounded-2xl p-5 mb-4">
+    <div class="flex items-center gap-3 mb-4">
+      <span class="bg-slate-100 text-2xl rounded-xl p-2">📷</span>
+      <div>
+        <p class="font-semibold text-slate-800">{{ cam.manufacturer }} · {{ cam.ip }}</p>
+        <p class="text-xs text-slate-400">Found on your network</p>
+      </div>
+    </div>
+
+    <input type="hidden" name="cam_{{ idx }}_ip" value="{{ cam.ip }}">
+
+    <div class="space-y-3">
+      <div>
+        <label class="block text-sm font-medium text-slate-700 mb-1">
+          Name this camera <span class="text-slate-400 font-normal">(e.g. Front Door, Driveway)</span>
+        </label>
+        <input type="text" name="cam_{{ idx }}_name" required
+               placeholder="Front Door"
+               class="w-full border border-slate-300 rounded-xl px-4 py-3 text-base focus:outline-none focus:ring-2 focus:ring-brand focus:border-transparent">
+      </div>
+
+      <div class="flex gap-3">
+        <div class="flex-1">
+          <label class="block text-sm font-medium text-slate-700 mb-1">Username</label>
+          <input type="text" name="cam_{{ idx }}_username" value="admin"
+                 class="w-full border border-slate-300 rounded-xl px-4 py-3 text-base focus:outline-none focus:ring-2 focus:ring-brand">
+        </div>
+        <div class="flex-1">
+          <label class="block text-sm font-medium text-slate-700 mb-1">Password</label>
+          <input type="password" name="cam_{{ idx }}_password"
+                 placeholder="camera password"
+                 class="w-full border border-slate-300 rounded-xl px-4 py-3 text-base focus:outline-none focus:ring-2 focus:ring-brand">
+        </div>
+      </div>
+      <p class="text-xs text-slate-400">
+        Find the password on a sticker on the back or bottom of your camera, or the one you set in the Reolink app.
+      </p>
+    </div>
+  </div>
+  {% endfor %}
+
+  <!-- Manual add section -->
+  <div id="manual-cameras"></div>
+
+  <button type="button"
+          onclick="addManualCamera()"
+          class="w-full border-2 border-dashed border-slate-300 hover:border-brand text-slate-500 hover:text-brand font-medium py-4 px-6 rounded-2xl text-base transition-colors mb-6">
+    + Add camera manually
+  </button>
+
+  <button type="submit"
+          class="w-full bg-brand hover:bg-brand-dark text-white font-semibold py-4 px-6 rounded-2xl text-lg transition-colors shadow-sm">
+    Continue →
+  </button>
+</form>
+
+<script>
+let manualCount = 0;
+function addManualCamera() {
+  const idx = manualCount++;
+  const container = document.getElementById('manual-cameras');
+  const div = document.createElement('div');
+  div.className = 'bg-white border border-slate-200 rounded-2xl p-5 mb-4';
+  div.innerHTML = `
+    <p class="font-semibold text-slate-800 mb-4">Camera ${idx + 1}</p>
+    <div class="space-y-3">
+      <div>
+        <label class="block text-sm font-medium text-slate-700 mb-1">IP Address</label>
+        <input type="text" name="manual_${idx}_ip" required
+               placeholder="192.168.1.101"
+               class="w-full border border-slate-300 rounded-xl px-4 py-3 text-base focus:outline-none focus:ring-2 focus:ring-brand">
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-slate-700 mb-1">Name</label>
+        <input type="text" name="manual_${idx}_name" required
+               placeholder="Front Door"
+               class="w-full border border-slate-300 rounded-xl px-4 py-3 text-base focus:outline-none focus:ring-2 focus:ring-brand">
+      </div>
+      <div class="flex gap-3">
+        <div class="flex-1">
+          <label class="block text-sm font-medium text-slate-700 mb-1">Username</label>
+          <input type="text" name="manual_${idx}_username" value="admin"
+                 class="w-full border border-slate-300 rounded-xl px-4 py-3 text-base focus:outline-none focus:ring-2 focus:ring-brand">
+        </div>
+        <div class="flex-1">
+          <label class="block text-sm font-medium text-slate-700 mb-1">Password</label>
+          <input type="password" name="manual_${idx}_password"
+                 class="w-full border border-slate-300 rounded-xl px-4 py-3 text-base focus:outline-none focus:ring-2 focus:ring-brand">
+        </div>
+      </div>
+    </div>
+  `;
+  container.appendChild(div);
+}
+</script>
+
+{# Jinja2 doesn't have enumerate built-in — we add it as a filter in main.py #}
+{% endblock %}

@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title_suffix %} — Done!{% endblock %}
+
+{% block content %}
+<div class="text-center py-6">
+  <div class="text-6xl mb-4">🎉</div>
+  <h1 class="text-3xl font-bold text-slate-900 mb-2">You're all set!</h1>
+  <p class="text-slate-500 mb-8">
+    Custos is recording and watching for activity. Your first alert should arrive within a few minutes.
+  </p>
+</div>
+
+<div class="bg-white border border-slate-200 rounded-2xl p-5 mb-6">
+  <p class="font-semibold text-slate-800 mb-3">
+    {{ cameras | length }} camera{{ 's' if cameras | length != 1 else '' }} configured:
+  </p>
+  <ul class="space-y-2">
+    {% for cam in cameras %}
+    <li class="flex items-center gap-3 text-slate-700">
+      <span class="w-2 h-2 rounded-full bg-green-400 flex-shrink-0"></span>
+      <span class="font-medium">{{ cam.display_name }}</span>
+      <span class="text-slate-400 text-sm">{{ cam.ip }}</span>
+    </li>
+    {% endfor %}
+  </ul>
+</div>
+
+<div class="flex flex-col gap-3">
+  <a href="/"
+     class="block text-center bg-brand hover:bg-brand-dark text-white font-semibold py-4 px-6 rounded-2xl text-lg transition-colors shadow-sm">
+    Open Dashboard →
+  </a>
+  <a href="/frigate"
+     class="block text-center bg-white hover:bg-slate-50 text-slate-700 font-semibold py-4 px-6 rounded-2xl text-lg border border-slate-200 transition-colors">
+    View Camera Recordings
+  </a>
+  <a href="/setup"
+     class="block text-center text-sm text-slate-400 hover:text-slate-600 py-2 transition-colors">
+    Run setup again / add cameras
+  </a>
+</div>
+{% endblock %}

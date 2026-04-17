@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Custos Setup{% block title_suffix %}{% endblock %}</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: { brand: { DEFAULT: '#2563eb', dark: '#1d4ed8' } }
+        }
+      }
+    }
+  </script>
+</head>
+<body class="min-h-screen bg-slate-50 text-slate-800 font-sans">
+
+  <!-- Progress bar -->
+  {% if step is defined %}
+  <div class="bg-white border-b border-slate-200">
+    <div class="max-w-xl mx-auto px-4 py-3 flex items-center justify-between">
+      <span class="text-sm font-semibold text-brand">Custos Setup</span>
+      <div class="flex gap-1.5">
+        {% for i in range(1, 6) %}
+        <div class="w-6 h-1.5 rounded-full {% if i <= step %}bg-brand{% else %}bg-slate-200{% endif %}"></div>
+        {% endfor %}
+      </div>
+      <span class="text-xs text-slate-400">Step {{ step }} of 5</span>
+    </div>
+  </div>
+  {% endif %}
+
+  <main class="max-w-xl mx-auto px-4 py-10">
+    {% block content %}{% endblock %}
+  </main>
+
+</body>
+</html>
