@@ -369,3 +369,15 @@ async def done(request: Request):
         "request": request,
         "cameras": cameras,
     })
+
+
+# ─── Event timeline ───────────────────────────────────────────────────────────
+
+@app.get("/events", response_class=HTMLResponse)
+async def events(request: Request):
+    state = _load()
+    cameras = state.get("cameras", [])
+    return templates.TemplateResponse("events.html", {
+        "request": request,
+        "cameras": cameras,
+    })

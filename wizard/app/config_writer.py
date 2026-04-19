@@ -305,12 +305,15 @@ def write_lovelace_dashboard(cameras: list[dict]) -> None:
                 "title": "Activity",
                 "path": "activity",
                 "icon": "mdi:bell-ring",
-                "type": "masonry",
+                "type": "panel",
                 "badges": [],
                 "cards": [
-                    {"type": "logbook", "title": "Detections — Last 24 Hours", "hours_to_show": 24, "entities": all_detection_entities},
-                    {"type": "button", "name": "Browse Event Clips", "icon": "mdi:video-box", "show_name": True,
-                     "tap_action": {"action": "url", "url_path": "/frigate/events"}},
+                    {
+                        "type": "webpage",
+                        "url": "http://custos.local/events",
+                        "aspect_ratio": "100%",
+                        "title": "Event Timeline",
+                    },
                 ],
             },
             {
