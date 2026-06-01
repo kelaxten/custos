@@ -1,0 +1,216 @@
+# =============================================================================
+# Custos Energy — load shifting + thermostat automations
+# Drop in: <config>/packages/custos_energy_automations.yaml
+#
+# Strategy:
+#   * Deferrable loads (water heater, EV, dishwasher, dehumidifier) run during
+#     OFF-PEAK (12am-6am) and are held OFF during PEAK (5pm-9pm, Mon-Sat).
+#   * Thermostat pre-conditions for ~1h before peak, coasts through peak with
+#     a relaxed setpoint, then restores after 9pm.
+#   * Everything is gated by input_boolean.custos_energy_optimize and the
+#     per-load defer toggles, so you can disable any of it without editing YAML.
+#
+# >>> EDIT every entity ID marked  # <-- EDIT  to match your devices. <<<
+# Define group.custos_deferrable_loads in groups.yaml (example in README).
+# =============================================================================
+
+automation:
+  # ---------------------------------------------------------------------------
+  # OFF-PEAK START (00:00) — run deferrable loads while power is cheapest.
+  # ---------------------------------------------------------------------------
+  - id: custos_offpeak_start_loads
+    alias: "Custos: off-peak — start deferrable loads"
+    mode: single
+    trigger:
+      - trigger: state
+        entity_id: sensor.custos_current_tariff
+        to: "off_peak"
+    condition:
+      - condition: state
+        entity_id: input_boolean.custos_energy_optimize
+        state: "on"
+    action:
+      - if:
+          - condition: state
+            entity_id: input_boolean.custos_defer_water_heater
+            state: "on"
+        then:
+          - action: switch.turn_on
+            target:
+              entity_id: switch.water_heater          # <-- EDIT
+      - if:
+          - condition: state
+            entity_id: input_boolean.custos_defer_ev_charger
+            state: "on"
+        then:
+          - action: switch.turn_on
+            target:
+              entity_id: switch.ev_charger             # <-- EDIT
+      - if:
+          - condition: state
+            entity_id: input_boolean.custos_defer_dehumidifier
+            state: "on"
+        then:
+          - action: switch.turn_on
+            target:
+              entity_id: switch.dehumidifier           # <-- EDIT
+
+  # ---------------------------------------------------------------------------
+  # PEAK START (17:00 Mon-Sat) — shed deferrable loads.
+  # Triggered off the tariff sensor so Sundays/holidays (no peak) are skipped
+  # automatically — the sensor never transitions to "peak" on those days.
+  # ---------------------------------------------------------------------------
+  - id: custos_peak_shed_loads
+    alias: "Custos: peak — shed deferrable loads"
+    mode: single
+    trigger:
+      - trigger: state
+        entity_id: sensor.custos_current_tariff
+        to: "peak"
+    condition:
+      - condition: state
+        entity_id: input_boolean.custos_energy_optimize
+        state: "on"
+    action:
+      - if:
+          - condition: state
+            entity_id: input_boolean.custos_defer_water_heater
+            state: "on"
+        then:
+          - action: switch.turn_off
+            target:
+              entity_id: switch.water_heater           # <-- EDIT
+      - if:
+          - condition: state
+            entity_id: input_boolean.custos_defer_ev_charger
+            state: "on"
+        then:
+          - action: switch.turn_off
+            target:
+              entity_id: switch.ev_charger             # <-- EDIT
+      - if:
+          - condition: state
+            entity_id: input_boolean.custos_defer_dehumidifier
+            state: "on"
+        then:
+          - action: switch.turn_off
+            target:
+              entity_id: switch.dehumidifier           # <-- EDIT
+
+  # ---------------------------------------------------------------------------
+  # THERMOSTAT — pre-condition ~1h before peak (only on days that have a peak).
+  # ---------------------------------------------------------------------------
+  - id: custos_thermostat_precondition
+    alias: "Custos: thermostat — pre-condition before peak"
+    mode: single
+    trigger:
+      - trigger: time
+        at: "16:00:00"
+    condition:
+      - condition: state
+        entity_id: input_boolean.custos_energy_optimize
+        state: "on"
+      # Skip on Sundays/holidays: no peak coming, nothing to pre-condition for.
+      - condition: template
+        value_template: >
+          {{ state_attr('sensor.custos_current_tariff','schedule') == 'weekday' }}
+    action:
+      - choose:
+          - conditions:
+              - condition: state
+                entity_id: climate.thermostat          # <-- EDIT
+                state: "cool"
+            sequence:
+              - action: climate.set_temperature
+                target:
+                  entity_id: climate.thermostat        # <-- EDIT
+                data:
+                  temperature: >
+                    {{ states('input_number.custos_comfort_cool_setpoint') | float
+                       - states('input_number.custos_precool_offset') | float }}
+          - conditions:
+              - condition: state
+                entity_id: climate.thermostat          # <-- EDIT
+                state: "heat"
+            sequence:
+              - action: climate.set_temperature
+                target:
+                  entity_id: climate.thermostat        # <-- EDIT
+                data:
+                  temperature: >
+                    {{ states('input_number.custos_comfort_heat_setpoint') | float
+                       + states('input_number.custos_precool_offset') | float }}
+
+  # ---------------------------------------------------------------------------
+  # THERMOSTAT — relax setpoint during peak (coast).
+  # ---------------------------------------------------------------------------
+  - id: custos_thermostat_peak_setback
+    alias: "Custos: thermostat — peak setback"
+    mode: single
+    trigger:
+      - trigger: state
+        entity_id: sensor.custos_current_tariff
+        to: "peak"
+    condition:
+      - condition: state
+        entity_id: input_boolean.custos_energy_optimize
+        state: "on"
+    action:
+      - choose:
+          - conditions:
+              - condition: state
+                entity_id: climate.thermostat          # <-- EDIT
+                state: "cool"
+            sequence:
+              - action: climate.set_temperature
+                target:
+                  entity_id: climate.thermostat        # <-- EDIT
+                data:
+                  temperature: "{{ states('input_number.custos_peak_cool_setpoint') | float }}"
+          - conditions:
+              - condition: state
+                entity_id: climate.thermostat          # <-- EDIT
+                state: "heat"
+            sequence:
+              - action: climate.set_temperature
+                target:
+                  entity_id: climate.thermostat        # <-- EDIT
+                data:
+                  temperature: "{{ states('input_number.custos_peak_heat_setpoint') | float }}"
+
+  # ---------------------------------------------------------------------------
+  # THERMOSTAT — restore comfort after peak (21:00 / leaving peak).
+  # ---------------------------------------------------------------------------
+  - id: custos_thermostat_restore
+    alias: "Custos: thermostat — restore after peak"
+    mode: single
+    trigger:
+      - trigger: state
+        entity_id: sensor.custos_current_tariff
+        from: "peak"
+    condition:
+      - condition: state
+        entity_id: input_boolean.custos_energy_optimize
+        state: "on"
+    action:
+      - choose:
+          - conditions:
+              - condition: state
+                entity_id: climate.thermostat          # <-- EDIT
+                state: "cool"
+            sequence:
+              - action: climate.set_temperature
+                target:
+                  entity_id: climate.thermostat        # <-- EDIT
+                data:
+                  temperature: "{{ states('input_number.custos_comfort_cool_setpoint') | float }}"
+          - conditions:
+              - condition: state
+                entity_id: climate.thermostat          # <-- EDIT
+                state: "heat"
+            sequence:
+              - action: climate.set_temperature
+                target:
+                  entity_id: climate.thermostat        # <-- EDIT
+                data:
+                  temperature: "{{ states('input_number.custos_comfort_heat_setpoint') | float }}"

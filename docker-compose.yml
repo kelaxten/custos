@@ -80,6 +80,38 @@ services:
       MQTT_USER: ${MQTT_USER:-custos}
       MQTT_PASSWORD: ${MQTT_PASSWORD}
 
+  # ─── Custos Energy ────────────────────────────────────────────────────────
+  # Optional Time-of-Use billing module. Computes the current TOU period and
+  # $/kWh rate from the wall clock every 60s and publishes it (retained) to the
+  # MQTT bus with Home Assistant discovery. HA then drives load-shifting and
+  # cost accounting via config/homeassistant/packages/custos_energy*.yaml.
+  # Self-contained — see custos-energy/README.md.
+  custos-energy:
+    build: ./custos-energy
+    container_name: custos-energy
+    restart: unless-stopped
+    network_mode: host        # reach the host-bound Mosquitto at 127.0.0.1:1883
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+    environment:
+      # Tariffs are wall-clock — TZ MUST match your billing locale, not UTC.
+      TZ: ${CUSTOS_ENERGY_TZ:-America/Los_Angeles}
+      CUSTOS_MQTT_HOST: 127.0.0.1
+      CUSTOS_MQTT_PORT: "1883"
+      CUSTOS_MQTT_USERNAME: ${MQTT_USER:-custos}
+      CUSTOS_MQTT_PASSWORD: ${MQTT_PASSWORD}
+      # Rates ($/kWh) — override if your utility changes them:
+      CUSTOS_RATE_OFF_PEAK: ${CUSTOS_RATE_OFF_PEAK:-0.0882}
+      CUSTOS_RATE_MID_PEAK: ${CUSTOS_RATE_MID_PEAK:-0.1543}
+      CUSTOS_RATE_PEAK: ${CUSTOS_RATE_PEAK:-0.1763}
+      CUSTOS_BASE_CHARGE_PER_DAY: ${CUSTOS_BASE_CHARGE_PER_DAY:-0.4262}
+      # Set "true" only if your utility honors federally-observed dates for
+      # holidays that fall on a weekend:
+      CUSTOS_OBSERVED_HOLIDAYS: ${CUSTOS_OBSERVED_HOLIDAYS:-false}
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+
   # ─── Setup Wizard ─────────────────────────────────────────────────────────────
   # Browser-based 5-screen setup: camera discovery → naming → detection → notifications → remote access.
   # Writes Frigate/HA configs and restarts services. Always accessible at custos.local/setup.
