@@ -1,0 +1,20 @@
+# Bare-metal alternative to the Docker service.
+# Install: sudo cp custos-energy.service /etc/systemd/system/
+#          sudo systemctl enable --now custos-energy
+[Unit]
+Description=Custos Energy TOU tariff publisher
+After=network-online.target mosquitto.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=custos
+WorkingDirectory=/opt/custos-energy
+Environment=TZ=America/Los_Angeles
+Environment=CUSTOS_MQTT_HOST=localhost
+ExecStart=/usr/bin/python3 -m custos_energy.publisher
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

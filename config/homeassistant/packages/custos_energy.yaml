@@ -1,0 +1,173 @@
+# =============================================================================
+# Custos Energy — Home Assistant package
+# Drop in: <config>/packages/custos_energy.yaml
+# Requires in configuration.yaml:
+#   homeassistant:
+#     packages: !include_dir_named packages
+#
+# The four MQTT sensors (sensor.custos_current_tariff, .custos_current_rate,
+# .custos_next_tariff_change, .custos_next_rate) are auto-created by the
+# custos-energy publisher via MQTT discovery — you do NOT define them here.
+#
+# >>> EDIT the entity IDs marked  # <-- EDIT  to match your hardware. <<<
+# =============================================================================
+
+# ----------------------------------------------------------------------------
+# Helpers
+# ----------------------------------------------------------------------------
+input_boolean:
+  custos_energy_optimize:
+    name: Custos Energy Optimization
+    icon: mdi:leaf
+  custos_defer_water_heater:
+    name: Defer Water Heater
+    icon: mdi:water-boiler
+  custos_defer_ev_charger:
+    name: Defer EV Charger
+    icon: mdi:ev-station
+  custos_defer_dishwasher:
+    name: Defer Dishwasher
+    icon: mdi:dishwasher
+  custos_defer_dehumidifier:
+    name: Defer Dehumidifier
+    icon: mdi:air-humidifier
+
+input_number:
+  custos_precool_offset:        # degrees to pre-cool/pre-heat before peak
+    name: Pre-condition Offset
+    min: 0
+    max: 8
+    step: 0.5
+    unit_of_measurement: "°F"
+    icon: mdi:thermometer-chevron-up
+  custos_peak_cool_setpoint:    # let it drift this high during peak (summer)
+    name: Peak Cooling Setpoint
+    min: 68
+    max: 85
+    step: 1
+    unit_of_measurement: "°F"
+    icon: mdi:snowflake-off
+  custos_peak_heat_setpoint:    # let it drift this low during peak (winter)
+    name: Peak Heating Setpoint
+    min: 55
+    max: 72
+    step: 1
+    unit_of_measurement: "°F"
+    icon: mdi:fire-off
+  custos_comfort_cool_setpoint:
+    name: Comfort Cooling Setpoint
+    min: 65
+    max: 80
+    step: 1
+    unit_of_measurement: "°F"
+    icon: mdi:snowflake
+  custos_comfort_heat_setpoint:
+    name: Comfort Heating Setpoint
+    min: 60
+    max: 75
+    step: 1
+    unit_of_measurement: "°F"
+    icon: mdi:fire
+  custos_flat_compare_rate:     # reference flat rate for savings estimate
+    name: Flat Comparison Rate
+    min: 0
+    max: 1
+    step: 0.0001
+    unit_of_measurement: "USD/kWh"
+    icon: mdi:scale-balance
+
+# ----------------------------------------------------------------------------
+# Per-tariff energy accounting
+# Splits whole-home consumption into off/mid/peak buckets so you can SEE where
+# the kWh land. Cost itself is best handled by the Energy dashboard using
+# sensor.custos_current_rate as the price entity (see README §"Cost").
+# ----------------------------------------------------------------------------
+utility_meter:
+  custos_energy_meter:
+    source: sensor.home_energy_total      # <-- EDIT: your whole-home kWh sensor
+    cycle: monthly
+    tariffs:
+      - off_peak
+      - mid_peak
+      - peak
+
+# ----------------------------------------------------------------------------
+# Cost / savings template sensors
+# ----------------------------------------------------------------------------
+template:
+  - sensor:
+      - name: Custos Base Charge MTD
+        unique_id: custos_base_charge_mtd
+        unit_of_measurement: USD
+        device_class: monetary
+        state_class: total
+        icon: mdi:calendar-clock
+        # Fixed daily service charge accrued so far this month.
+        state: "{{ (now().day * 0.4262) | round(2) }}"
+
+      - name: Custos TOU Energy Cost MTD
+        unique_id: custos_tou_energy_cost_mtd
+        unit_of_measurement: USD
+        device_class: monetary
+        state_class: total
+        icon: mdi:cash-multiple
+        # Per-tariff kWh * matching rate. Adjust rates here if they change.
+        state: >
+          {% set off = states('sensor.custos_energy_meter_off_peak') | float(0) %}
+          {% set mid = states('sensor.custos_energy_meter_mid_peak') | float(0) %}
+          {% set pk  = states('sensor.custos_energy_meter_peak')     | float(0) %}
+          {{ (off * 0.0882 + mid * 0.1543 + pk * 0.1763) | round(2) }}
+
+      - name: Custos Total Bill MTD
+        unique_id: custos_total_bill_mtd
+        unit_of_measurement: USD
+        device_class: monetary
+        state_class: total
+        icon: mdi:receipt-text
+        state: >
+          {{ (states('sensor.custos_tou_energy_cost_mtd') | float(0)
+              + states('sensor.custos_base_charge_mtd') | float(0)) | round(2) }}
+
+      - name: Custos Estimated Savings MTD
+        unique_id: custos_estimated_savings_mtd
+        unit_of_measurement: USD
+        device_class: monetary
+        state_class: total
+        icon: mdi:piggy-bank
+        # What a flat rate would have cost minus what TOU actually cost.
+        # Positive = TOU + load shifting is beating the flat rate.
+        state: >
+          {% set off = states('sensor.custos_energy_meter_off_peak') | float(0) %}
+          {% set mid = states('sensor.custos_energy_meter_mid_peak') | float(0) %}
+          {% set pk  = states('sensor.custos_energy_meter_peak')     | float(0) %}
+          {% set total_kwh = off + mid + pk %}
+          {% set flat = states('input_number.custos_flat_compare_rate') | float(0) %}
+          {% set tou = states('sensor.custos_tou_energy_cost_mtd') | float(0) %}
+          {{ ((flat * total_kwh) - tou) | round(2) }}
+
+# ----------------------------------------------------------------------------
+# Keep the utility_meter's active tariff in sync with the published tariff.
+# ----------------------------------------------------------------------------
+automation:
+  - id: custos_sync_utility_meter_tariff
+    alias: "Custos: sync utility meter tariff"
+    description: >
+      Switches the per-tariff energy meter whenever the published TOU period
+      changes, so kWh land in the correct bucket.
+    mode: single
+    trigger:
+      - trigger: state
+        entity_id: sensor.custos_current_tariff
+      - trigger: homeassistant
+        event: start
+    condition:
+      - condition: template
+        value_template: >
+          {{ states('sensor.custos_current_tariff') in
+             ['off_peak','mid_peak','peak'] }}
+    action:
+      - action: select.select_option
+        target:
+          entity_id: select.custos_energy_meter
+        data:
+          option: "{{ states('sensor.custos_current_tariff') }}"

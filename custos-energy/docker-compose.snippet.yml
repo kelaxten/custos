@@ -1,0 +1,23 @@
+# Add this service to the existing Custos docker-compose.yml.
+# It joins the same network as Mosquitto and Home Assistant.
+services:
+  custos-energy:
+    build: ./custos-energy            # path to this module in the repo
+    container_name: custos-energy
+    restart: unless-stopped
+    depends_on:
+      - mosquitto
+    environment:
+      TZ: "America/Los_Angeles"        # billing locale — do not leave as UTC
+      CUSTOS_MQTT_HOST: "mosquitto"
+      CUSTOS_MQTT_PORT: "1883"
+      # CUSTOS_MQTT_USERNAME: "custos"
+      # CUSTOS_MQTT_PASSWORD: "changeme"
+      # Rates — override here if your utility changes them:
+      CUSTOS_RATE_OFF_PEAK: "0.0882"
+      CUSTOS_RATE_MID_PEAK: "0.1543"
+      CUSTOS_RATE_PEAK: "0.1763"
+      CUSTOS_BASE_CHARGE_PER_DAY: "0.4262"
+      # Set to "true" only if your utility honors federally-observed dates
+      # for holidays that fall on a weekend:
+      CUSTOS_OBSERVED_HOLIDAYS: "false"

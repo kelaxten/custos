@@ -8,6 +8,8 @@ homeassistant:
   unit_system: imperial
   time_zone: America/New_York   # Update to your timezone (see docs/raspberry-pi-setup.md)
   country: US
+  # Optional add-on modules (e.g. Custos Energy) ship as packages.
+  packages: !include_dir_named packages
 
 # Allow HA to be accessed through the Caddy reverse proxy
 http:

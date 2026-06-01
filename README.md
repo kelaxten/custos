@@ -100,6 +100,22 @@ More: **[docs/raspberry-pi-setup.md](docs/raspberry-pi-setup.md)**
 
 ---
 
+## Optional: Energy (Time-of-Use Optimization)
+
+Custos ships with an optional **Custos Energy** module that adds electricity-cost
+awareness and automated load shifting on top of the same Raspberry Pi and MQTT
+bus. A small, fully-tested Python service computes the current Time-of-Use period
+and $/kWh rate from the wall clock and publishes it to Home Assistant, which then
+shifts deferrable loads (water heater, EV charger, etc.) and pre-conditions the
+thermostat around peak hours.
+
+It's wired into the stack but inert until you enable it — bring it up with
+`docker compose up -d custos-energy`, set your rates in `.env`, and flip the
+`Custos Energy Optimization` toggle in Home Assistant. See
+**[custos-energy/README.md](custos-energy/README.md)** for the full setup.
+
+---
+
 ## Project Roadmap
 
 See **[ROADMAP.md](ROADMAP.md)** for the full vision and phased development plan.
